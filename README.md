@@ -36,7 +36,7 @@
 - [FFI Bindings (Planned)](#ffi-bindings-planned)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
-- [Support the Project](#support-the-project)
+<!-- - [Support the Project](#support-the-project) — coming soon -->
 - [License](#license)
 
 ---
@@ -348,15 +348,19 @@ For larger changes (new format support, architectural changes), please **open an
 
 ---
 
-## Support the Project
+<!-- ## Support the Project
 
-Gatekeeper is free, open-source, and built on volunteer time. If it saves you hours of security engineering work, consider supporting continued development:
+Donation links will be added here once the payment platforms are set up.
+Uncomment this section and fill in the real URLs when ready.
+
+Gatekeeper is free, open-source, and built on volunteer time. If it saves you hours
+of security engineering work, consider supporting continued development:
 
 | Platform | Link |
 |---|---|
-| ☕ Buy Me a Coffee | [buymeacoffee.com/twarimitsweaaron](https://buymeacoffee.com/twarimitsweaaron) |
-| 💖 Ko-fi | [ko-fi.com/twarimitsweaaron](https://ko-fi.com/twarimitsweaaron) |
-| 🌟 GitHub Sponsors | [github.com/sponsors/Twarimitswe-Aaron](https://github.com/sponsors/Twarimitswe-Aaron) |
+| ☕ Buy Me a Coffee | [buymeacoffee.com/YOUR_USERNAME](https://buymeacoffee.com/YOUR_USERNAME) |
+| 💖 Ko-fi | [ko-fi.com/YOUR_USERNAME](https://ko-fi.com/YOUR_USERNAME) |
+| 🌟 GitHub Sponsors | [github.com/sponsors/YOUR_USERNAME](https://github.com/sponsors/YOUR_USERNAME) |
 
 Your support directly funds:
 - New format sanitizer implementations
@@ -364,7 +368,7 @@ Your support directly funds:
 - Security audits of the core parsing layer
 - Documentation and example improvements
 
----
+-->
 
 ## License
 
