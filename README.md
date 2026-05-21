@@ -303,14 +303,245 @@ let clean_png = sanitize_jpeg(&jpeg_bytes)?;
 
 ## FFI Bindings (Planned)
 
-The `cdylib` target is already compiled. Phase 7+ will add idiomatic wrappers for:
+The `cdylib` target is already compiled and emits a native shared library (`.so` / `.dll` / `.dylib`).
+The sections below show the **planned** import and usage API for each target language.
+These bindings do not exist yet — they are the design target for Phases 7–11.
 
-| Language | Crate / Tool | Status |
-|----------|-------------|--------|
-| Node.js  | `napi-rs`   | Planned |
-| Python   | `PyO3`      | Planned |
-| PHP      | `ext-php-rs`| Planned |
-| C / C++  | Raw `extern "C"` | Planned |
+| Language | Bridge / tool | Install package | Status |
+|----------|--------------|-----------------|--------|
+| Node.js  | `napi-rs`    | `npm install gatekeeper-cdr` | Phase 7 — planned |
+| Python   | `PyO3`       | `pip install gatekeeper-cdr` | Phase 8 — planned |
+| PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — planned |
+| C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — planned |
+| Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr` | Phase 10 — planned |
+| Java     | JNI via `jni` crate | Maven / Gradle dependency | Phase 11 — planned |
+
+---
+
+### Node.js (via napi-rs)
+
+<!-- PLANNED — not yet implemented. Bindings will be published to npm as `gatekeeper-cdr`. -->
+
+```js
+// Install:
+//   npm install gatekeeper-cdr
+//   yarn add gatekeeper-cdr
+
+const { disarm, sniffFormat } = require('gatekeeper-cdr');
+
+// --- Detect format ---
+const fs = require('fs');
+const raw = fs.readFileSync('suspicious.jpg');
+
+const format = sniffFormat(raw);   // Returns 'Jpeg' | 'Png'
+console.log('Detected:', format);
+
+// --- Sanitize (returns a Buffer containing a clean PNG) ---
+const clean = disarm(raw);
+fs.writeFileSync('clean.png', clean);
+
+// --- ES Module import (planned) ---
+// import { disarm, sniffFormat } from 'gatekeeper-cdr';
+```
+
+<!-- END PLANNED -->
+
+---
+
+### Python (via PyO3)
+
+<!-- PLANNED — not yet implemented. Bindings will be published to PyPI as `gatekeeper-cdr`. -->
+
+```python
+# Install:
+#   pip install gatekeeper-cdr
+
+import gatekeeper_cdr
+
+# --- Detect format ---
+with open("suspicious.jpg", "rb") as f:
+    raw: bytes = f.read()
+
+fmt: str = gatekeeper_cdr.sniff_format(raw)   # Returns 'Jpeg' or 'Png'
+print(f"Detected: {fmt}")
+
+# --- Sanitize (returns bytes containing a clean PNG) ---
+clean: bytes = gatekeeper_cdr.disarm(raw)
+
+with open("clean.png", "wb") as f:
+    f.write(clean)
+
+# --- Async variant (planned for Phase 10) ---
+# clean = await gatekeeper_cdr.disarm_async(raw)
+```
+
+<!-- END PLANNED -->
+
+---
+
+### PHP (via ext-php-rs)
+
+<!-- PLANNED — not yet implemented. Will be distributed as a compiled .so extension. -->
+
+```php
+<?php
+// Install:
+//   Add the compiled libgatekeeper.so to your php.ini:
+//   extension=/path/to/gatekeeper_cdr.so
+//
+//   Or via Composer (planned):
+//   composer require gatekeeper/cdr
+
+// --- Detect format ---
+$raw = file_get_contents('suspicious.jpg');
+
+$format = gatekeeper_sniff_format($raw);  // Returns "Jpeg" or "Png"
+echo "Detected: $format\n";
+
+// --- Sanitize (returns a string of raw PNG bytes) ---
+$clean = gatekeeper_disarm($raw);
+
+file_put_contents('clean.png', $clean);
+?>
+```
+
+<!-- END PLANNED -->
+
+---
+
+### C / C++ (Raw FFI)
+
+<!-- PLANNED — not yet implemented. The extern "C" header will ship alongside the cdylib. -->
+
+```c
+// Link against:  -L. -lgatekeeper -Wl,-rpath,.
+// Header:        #include "gatekeeper.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include "gatekeeper.h"
+
+int main(void) {
+    /* Read file into buffer (caller-managed memory) */
+    FILE *f = fopen("suspicious.jpg", "rb");
+    fseek(f, 0, SEEK_END);
+    size_t len = ftell(f);
+    rewind(f);
+    uint8_t *raw = malloc(len);
+    fread(raw, 1, len, f);
+    fclose(f);
+
+    /* Sanitize — returns a heap-allocated CdrResult */
+    CdrResult result = gatekeeper_disarm(raw, len);
+
+    if (result.ok) {
+        FILE *out = fopen("clean.png", "wb");
+        fwrite(result.data, 1, result.len, out);
+        fclose(out);
+    } else {
+        fprintf(stderr, "CDR error code: %d\n", result.error_code);
+    }
+
+    /* Always free the CdrResult buffer through the library */
+    gatekeeper_free_result(result);
+    free(raw);
+    return 0;
+}
+```
+
+<!-- END PLANNED -->
+
+---
+
+### Go (via CGo)
+
+<!-- PLANNED — not yet implemented. Will be distributed as a Go module on pkg.go.dev. -->
+
+```go
+// Install:
+//   go get github.com/Twarimitswe-Aaron/gatekeeper-cdr
+//
+// Requires CGo enabled (default) and the compiled libgatekeeper.so
+// on your library path, or bundled via the Go module build tags.
+
+package main
+
+import (
+    "fmt"
+    "os"
+
+    gatekeeper "github.com/Twarimitswe-Aaron/gatekeeper-cdr"
+)
+
+func main() {
+    raw, err := os.ReadFile("suspicious.jpg")
+    if err != nil {
+        panic(err)
+    }
+
+    // Detect format (does not allocate, stack-only in Rust)
+    fmt, err := gatekeeper.SniffFormat(raw)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("Detected:", fmt) // "Jpeg" or "Png"
+
+    // Sanitize — returns []byte containing a clean PNG
+    clean, err := gatekeeper.Disarm(raw)
+    if err != nil {
+        panic(err)
+    }
+
+    os.WriteFile("clean.png", clean, 0644)
+}
+```
+
+<!-- END PLANNED -->
+
+---
+
+### Java (via JNI)
+
+<!-- PLANNED — not yet implemented. Will be published to Maven Central. -->
+
+```xml
+<!-- Maven (pom.xml) -->
+<dependency>
+    <groupId>io.github.twarimitswe-aaron</groupId>
+    <artifactId>gatekeeper-cdr</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+```groovy
+// Gradle (build.gradle)
+implementation 'io.github.twarimitswe-aaron:gatekeeper-cdr:0.1.0'
+```
+
+```java
+import io.github.gatekeeper.GatekeeperCdr;
+import io.github.gatekeeper.FileFormat;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        byte[] raw = Files.readAllBytes(Path.of("suspicious.jpg"));
+
+        // Detect format
+        FileFormat fmt = GatekeeperCdr.sniffFormat(raw);
+        System.out.println("Detected: " + fmt); // JPEG or PNG
+
+        // Sanitize — returns byte[] containing a clean PNG
+        byte[] clean = GatekeeperCdr.disarm(raw);
+
+        Files.write(Path.of("clean.png"), clean);
+    }
+}
+```
+
+<!-- END PLANNED -->
 
 ---
 
@@ -322,11 +553,13 @@ The `cdylib` target is already compiled. Phase 7+ will add idiomatic wrappers fo
 - [ ] **Phase 4** — GIF and WebP support
 - [ ] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
 - [ ] **Phase 6** — DOCX / XLSX / PPTX Office format sanitization
-- [ ] **Phase 7** — `napi-rs` Node.js bindings
-- [ ] **Phase 8** — `PyO3` Python bindings
-- [ ] **Phase 9** — `ext-php-rs` PHP bindings
-- [ ] **Phase 10** — Async pipeline via Tokio for streaming large files
-- [ ] **Phase 11** — WASM target for browser-side CDR
+- [ ] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
+- [ ] **Phase 8** — `PyO3` Python bindings → publish to PyPI
+- [ ] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
+- [ ] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
+- [ ] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
+- [ ] **Phase 12** — Async pipeline via Tokio for streaming large files
+- [ ] **Phase 13** — WASM target for browser-side CDR
 
 ---
 
