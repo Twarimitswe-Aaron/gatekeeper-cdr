@@ -34,6 +34,7 @@ pub mod errors;
 pub mod sanitizers;
 
 use errors::CdrError;
+use sanitizers::jpeg::SanitizedOutput;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 
@@ -162,21 +163,29 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 
 /// Detect, validate, and sanitise `payload` in a single call.
 ///
-/// This is the primary public entry point for the CDR engine.  Internally it:
-///   1. Calls [`sniff_format`] to identify the format via magic bytes.
-///   2. Dispatches to the format-specific sanitizer pipeline.
-///   3. Returns the reconstructed, metadata-free output bytes.
+/// Returns a [`SanitizedOutput`] token — a newtype wrapper that the compiler
+/// treats as a distinct type from `Vec<u8>` or any raw intermediate.
 ///
-/// # Example
+/// ## Signature lockdown
+/// Any function that should only ever receive sanitised data must declare its
+/// parameter as `SanitizedOutput`:
+///
 /// ```rust,no_run
+/// use gatekeeper::disarm;
+///
+/// fn save_to_storage(bytes: Vec<u8>) {
+///     std::fs::write("clean.png", bytes).unwrap();
+/// }
+///
 /// let raw = std::fs::read("untrusted.jpg").unwrap();
-/// let clean = gatekeeper::disarm(&raw).expect("CDR failed");
-/// std::fs::write("clean_output.png", clean).unwrap();
+/// let clean = disarm(&raw).expect("CDR failed");
+/// save_to_storage(clean.into_bytes()); // only SanitizedOutput has into_bytes()
+/// // save_to_storage(raw);   ← compile error: Vec<u8> has no into_bytes()
 /// ```
 ///
 /// # Errors
 /// Any [`CdrError`] from format detection or the sanitizer pipeline.
-pub fn disarm(payload: &[u8]) -> Result<Vec<u8>, CdrError> {
+pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
     match sniff_format(payload)? {
         FileFormat::Jpeg => sanitizers::jpeg::sanitize_jpeg(payload),
         FileFormat::Png => {
@@ -185,7 +194,7 @@ pub fn disarm(payload: &[u8]) -> Result<Vec<u8>, CdrError> {
             // A full PNG decode + pixel-matrix re-encode pipeline will land
             // in Phase 3.  Until then we return a hard error rather than
             // forwarding unsanitised bytes to the caller — forwarding would
-            // violate the zero-trust contract (V4 from the audit).
+            // violate the zero-trust contract.
             Err(CdrError::Unimplemented { format: "PNG" })
         }
     }

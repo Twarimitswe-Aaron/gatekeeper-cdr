@@ -11,6 +11,7 @@
 use gatekeeper::{disarm, sniff_format};
 use std::{env, fs, path::Path, process};
 
+
 fn main() {
     // ── Parse CLI args ────────────────────────────────────────────────────
     let args: Vec<String> = env::args().collect();
@@ -59,13 +60,18 @@ fn main() {
     // ── Run CDR pipeline ──────────────────────────────────────────────────
     println!("▶ Disarming...");
 
-    let clean_bytes = match disarm(&raw_bytes) {
-        Ok(b) => b,
+    let sanitized = match disarm(&raw_bytes) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("✗ CDR pipeline failed: {e}");
             process::exit(1);
         }
     };
+
+    // External callers extract bytes via the public into_bytes() method.
+    // The formal `let SanitizedOutput(bytes) = ...` destructure is reserved
+    // for code inside the crate (e.g. a save_to_storage fn in the lib).
+    let clean_bytes = sanitized.into_bytes();
 
     println!("  Output   : {} bytes ({:.2} KB)", clean_bytes.len(), clean_bytes.len() as f64 / 1024.0);
 
