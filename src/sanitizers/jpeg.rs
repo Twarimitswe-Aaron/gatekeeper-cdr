@@ -21,20 +21,21 @@
 //
 //  Typestate chain
 //  ───────────────
-//  JpegPipeline<RawPayload>      – holds the untrusted input slice
-//       │  .validate()
+//  JpegPipeline<RawPayload<'a>>     – borrows the caller slice; zero copies
+//       │  .decode()
 //       ▼
-//  JpegPipeline<DisarmedMatrix>  – holds naked pixel rows (heap-allocated
-//       │                          once, here, and never again)
+//  JpegPipeline<DisarmedMatrix>     – owns the naked pixel matrix and geometry
 //       │  .reconstruct()
 //       ▼
-//  JpegPipeline<PristineStream>  – holds the output PNG byte vector
+//  JpegPipeline<PristineStream>     – owns the output PNG byte vector
 //       │  .into_bytes()
 //       ▼
-//      Vec<u8>                   – caller owns the clean output
+//      Vec<u8>                      – caller owns the clean output
 //
-//  Each state transition is a consuming method (`self`), so the compiler
-//  statically prevents calling stages out of order or re-using a state.
+//  Data lives INSIDE the marker type, not in a shared inner enum.
+//  Consequence: every `unreachable!()` guard from the old design is gone.
+//  The compiler statically proves that only the correct data variant exists
+//  at each stage because the enum no longer exists at all.
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
@@ -42,129 +43,113 @@ use png::{BitDepth, ColorType, Encoder};
 use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
 
-// ── Typestate marker types ────────────────────────────────────────────────────
+// ── Typestate marker types — each carries its own data ───────────────────────
 
-/// Stage 0 — the raw, untrusted input payload.
-pub struct RawPayload;
-
-/// Stage 1 — the decoded, metadata-free pixel matrix.
-pub struct DisarmedMatrix;
-
-/// Stage 2 — the reconstructed, pristine output stream.
-pub struct PristineStream;
-
-// ── Typestate pipeline shell ──────────────────────────────────────────────────
-
-/// Generic pipeline shell parameterised over the current stage marker `S`.
+/// Stage 0 — borrows the caller's raw, untrusted input slice.
 ///
-/// Data members are private; callers advance state by consuming `self` through
-/// the stage-specific `impl` blocks below.
-pub struct JpegPipeline<S> {
-    /// Internal stage payload.  The outer type ensures only the correct
-    /// variant is ever present at each state.
-    inner: PipelineInner,
-    /// PhantomData carries the stage marker at zero runtime cost.
-    _state: std::marker::PhantomData<S>,
+/// The lifetime `'a` ties the pipeline to the caller's buffer; no copy is
+/// ever made of the input.  The pipeline cannot outlive the slice it borrows.
+pub struct RawPayload<'a> {
+    /// Immutable borrow of the caller's buffer.  Zero bytes are written.
+    pub(crate) bytes: &'a [u8],
 }
 
-/// The actual data that travels through the pipeline.
+/// Stage 1 — owns the decoded, metadata-free pixel matrix.
 ///
-/// Only the variant relevant to the current stage is populated; previous
-/// variants are `()` after a move-consuming transition.
-enum PipelineInner {
-    /// Holds a reference to the caller-supplied slice (zero-copy).
-    Raw {
-        /// Zero-copy reference into the caller's buffer.
-        payload: Vec<u8>, // we store as Vec to own the copied bytes once from caller
-    },
-    /// Holds the freshly decoded pixel matrix and geometry.
-    Decoded {
-        /// Raw RGB pixel bytes, one byte per channel, row-major.
-        pixels: Vec<u8>,
-        /// Image width in pixels (fits u16 per JPEG spec; promoted to u32 for
-        /// PNG encoder compatibility).
-        width: u32,
-        /// Image height in pixels.
-        height: u32,
-    },
-    /// Holds the re-encoded output bytes.
-    Encoded { output: Vec<u8> },
+/// This is the first and only heap allocation in the decode leg: the pixel
+/// buffer returned by `zune-jpeg`.  Every JPEG structural marker
+/// (APP0-APP15, COM, DRI, EXIF, ICC) is consumed by the decoder's internal
+/// Huffman + DCT engine and is **never** written to this buffer.
+pub struct DisarmedMatrix {
+    /// Flat, interleaved RGB bytes; 3 bytes per pixel, row-major.
+    pixels: Vec<u8>,
+    /// Image width in pixels (u16 per JPEG spec; widened to u32 for the PNG
+    /// encoder API).
+    width: u32,
+    /// Image height in pixels.
+    height: u32,
+}
+
+/// Stage 2 — owns the reconstructed, pristine PNG output stream.
+pub struct PristineStream {
+    /// A valid PNG byte stream that shares zero bytes with the original input.
+    output: Vec<u8>,
+}
+
+// ── Generic pipeline shell ────────────────────────────────────────────────────
+
+/// Typestate pipeline shell parameterised over the current stage `S`.
+///
+/// `S` is not merely a zero-sized marker — it *is* the data for that stage.
+/// There is no shared inner enum; the compiler cannot mix stage variants.
+pub struct JpegPipeline<S> {
+    /// Current stage, carrying its own data.
+    stage: S,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Stage 0 → Stage 1: RawPayload → DisarmedMatrix
 // ─────────────────────────────────────────────────────────────────────────────
 
-impl JpegPipeline<RawPayload> {
+impl<'a> JpegPipeline<RawPayload<'a>> {
     /// Construct the pipeline from a caller-supplied slice.
     ///
     /// # Zero-copy guarantee
-    /// `input` is a borrowed slice.  The pipeline copies it into its internal
-    /// `Vec<u8>` only once, here, which is the minimum required for the zune
-    /// `ZCursor` ownership model.  From this point forward no further copies
-    /// are made until the final PNG output allocation.
+    ///
+    /// No bytes are copied.  The pipeline stores a `&'a [u8]` borrow that
+    /// must remain valid for the duration of the `decode()` call.  The
+    /// lifetime `'a` is propagated through the pipeline shell so the Rust
+    /// borrow checker enforces this at compile time.
     ///
     /// # Arguments
-    /// * `input` – untrusted JPEG bytes, typically received from a network
-    ///   buffer or memory-mapped file.
+    /// * `input` — untrusted JPEG bytes, typically a memory-mapped file or a
+    ///   network-received buffer.
     #[must_use]
-    pub fn new(input: &[u8]) -> Self {
+    pub fn new(input: &'a [u8]) -> Self {
         Self {
-            inner: PipelineInner::Raw {
-                payload: input.to_vec(),
-            },
-            _state: std::marker::PhantomData,
+            stage: RawPayload { bytes: input },
         }
     }
 
     /// Advance from `RawPayload` to `DisarmedMatrix`.
     ///
     /// Internally this method:
-    /// 1. Creates a `ZCursor` wrapper that satisfies `zune-jpeg`'s
-    ///    `ZByteReaderTrait` without a second heap copy.
+    /// 1. Wraps the borrowed slice in a `ZCursor` — a thin reader that
+    ///    satisfies `ZByteReaderTrait` with zero extra allocation.
     /// 2. Configures the decoder to output **RGB** (24-bit) pixels, dropping
-    ///    all APP0–APP15 application markers, EXIF, ICC profiles, COM markers,
-    ///    and DCT metadata automatically—they are never transferred to the
-    ///    pixel matrix.
+    ///    all APP0–APP15, EXIF, ICC, and COM markers automatically.
     /// 3. Validates output geometry against the decoder-reported dimensions.
     ///
     /// # Errors
-    /// Returns [`CdrError::JpegDecodeFailed`] if the input is not a valid JPEG
-    /// bitstream, or geometry-related errors if the decoder reports impossible
-    /// dimensions.
+    /// * [`CdrError::JpegDecodeFailed`] — invalid JPEG bitstream.
+    /// * [`CdrError::MissingImageInfo`] — decoder reported no geometry.
+    /// * [`CdrError::DegenerateDimensions`] — zero width or height.
+    /// * [`CdrError::PixelBufferMismatch`] — pixel count inconsistent with geometry.
     pub fn decode(self) -> Result<JpegPipeline<DisarmedMatrix>, CdrError> {
-        // ── Extract owned bytes from stage inner ──────────────────────────
-        let payload = match self.inner {
-            PipelineInner::Raw { payload } => payload,
-            // Unreachable due to typestate enforcement, but avoids a
-            // non-exhaustive match.
-            _ => unreachable!("RawPayload pipeline cannot hold decoded data"),
-        };
+        let bytes: &[u8] = self.stage.bytes;
 
-        // ── Build decoder with strict output colorspace ───────────────────
+        // ── Build decoder with strict RGB output colorspace ───────────────
         //
-        // `ColorSpace::RGB` forces zune-jpeg to always output 3-channel
-        // interleaved bytes regardless of the source encoding (greyscale,
-        // YCbCr 4:2:0, etc.).  This normalises the output surface so the
-        // re-encoder always sees a predictable buffer layout.
+        // `ColorSpace::RGB` forces 3-channel interleaved output regardless of
+        // the source encoding (greyscale, YCbCr 4:2:0, CMYK, etc.), giving
+        // the re-encoder a single, predictable buffer layout.
         let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
 
-        // `ZCursor` is a thin, no-alloc wrapper over the owned Vec.
-        let cursor = ZCursor::new(payload);
+        // `ZCursor::new` accepts `&[u8]` directly — no `.to_vec()` needed.
+        // The cursor borrows `bytes` for the duration of `decode()`.
+        let cursor = ZCursor::new(bytes);
         let mut decoder = JpegDecoder::new_with_options(cursor, options);
 
         // ── Decode pixel data ─────────────────────────────────────────────
         //
-        // `decode()` returns a flat Vec<u8> of interleaved RGB triples.
-        // All JPEG structural markers (APP0-APP15, COM, DRI, etc.) are parsed
-        // by zune internally to reconstruct DCT coefficients; they are
-        // **consumed** and never forwarded to the output buffer.
+        // `decode()` returns a fresh Vec<u8> of interleaved RGB triples.
+        // This is the mandatory allocation: pixel data must live somewhere.
+        // All JPEG markers are consumed internally; none reach the output.
         let pixels = decoder.decode()?;
 
-        // ── Extract validated geometry ────────────────────────────────────
+        // ── Extract and validate geometry ─────────────────────────────────
         let info = decoder.info().ok_or(CdrError::MissingImageInfo)?;
 
-        // Reject degenerate dimensions before entering re-encode.
         if info.width == 0 || info.height == 0 {
             return Err(CdrError::DegenerateDimensions {
                 width: info.width,
@@ -172,8 +157,8 @@ impl JpegPipeline<RawPayload> {
             });
         }
 
-        // Verify the pixel buffer size is geometrically consistent.
-        // RGB = 3 bytes per pixel.
+        // RGB = 3 bytes per pixel.  Use checked arithmetic to guard against
+        // astronomically large dimensions producing overflow.
         let expected = (info.width as usize)
             .checked_mul(info.height as usize)
             .and_then(|n| n.checked_mul(3))
@@ -187,12 +172,11 @@ impl JpegPipeline<RawPayload> {
         }
 
         Ok(JpegPipeline {
-            inner: PipelineInner::Decoded {
+            stage: DisarmedMatrix {
                 pixels,
                 width: info.width as u32,
                 height: info.height as u32,
             },
-            _state: std::marker::PhantomData,
         })
     }
 }
@@ -205,56 +189,51 @@ impl JpegPipeline<DisarmedMatrix> {
     /// Advance from `DisarmedMatrix` to `PristineStream`.
     ///
     /// Re-encodes the naked pixel matrix as a **lossless PNG**.  PNG is chosen
-    /// for the reconstruction output because:
+    /// because:
     ///   - It is lossless: every pixel value is preserved bit-for-bit.
-    ///   - A freshly encoded PNG contains exactly one IHDR, one IDAT, and one
-    ///     IEND chunk — the absolute structural minimum.
-    ///   - No EXIF, ICC, or XMP metadata is injected by the `png` encoder
-    ///     unless explicitly requested (we never do).
+    ///   - A freshly encoded PNG contains exactly IHDR + IDAT + IEND — the
+    ///     structural minimum.
+    ///   - The `png` encoder never injects EXIF, ICC, or XMP metadata unless
+    ///     explicitly requested (we never do).
     ///
     /// # Errors
-    /// Returns [`CdrError::PngEncodeFailed`] on encoder I/O faults.
+    /// Returns [`CdrError::PngEncodeFailed`] on encoder faults.
     pub fn reconstruct(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
-        // ── Extract pixel matrix ──────────────────────────────────────────
-        let (pixels, width, height) = match self.inner {
-            PipelineInner::Decoded {
-                pixels,
-                width,
-                height,
-            } => (pixels, width, height),
-            _ => unreachable!("DisarmedMatrix pipeline cannot hold raw or encoded data"),
-        };
+        let DisarmedMatrix {
+            pixels,
+            width,
+            height,
+        } = self.stage;
 
-        // ── Allocate output buffer ────────────────────────────────────────
+        // ── Allocate the output buffer ────────────────────────────────────
         //
-        // This is the **only** dynamic allocation in the reconstruction leg.
-        // Pre-size to avoid incremental reallocations.  A rough upper bound
-        // for an uncompressed RGB PNG is width × height × 3 + PNG framing.
-        let approx_capacity = (width as usize * height as usize * 3) + 1024;
+        // This is the only allocation in the reconstruction leg.
+        // Pre-size to avoid incremental reallocations during PNG framing.
+        // Upper bound: uncompressed RGB data + PNG chunk overhead.
+        let approx_capacity = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(3)
+            .saturating_add(1024);
         let mut output: Vec<u8> = Vec::with_capacity(approx_capacity);
 
-        // ── Configure PNG encoder ─────────────────────────────────────────
+        // ── Configure and run PNG encoder ─────────────────────────────────
         //
-        // We write directly into the Vec<u8> which implements `Write`.
+        // Write directly into the Vec<u8> (impl Write).
         // No file handle, no temp file, no extra system calls.
         {
             let mut encoder = Encoder::new(&mut output, width, height);
-
-            // RGB 8-bit: matches the zune-jpeg output colorspace.
             encoder.set_color(ColorType::Rgb);
             encoder.set_depth(BitDepth::Eight);
 
-            // Write PNG signature + IHDR chunk, then the pixel data in IDAT,
-            // then IEND.  The `writer` scope ensures IEND is flushed before
-            // we read `output`.
+            // write_header() emits the PNG signature and IHDR chunk.
+            // write_image_data() emits IDAT chunk(s).
+            // Dropping `writer` emits the IEND chunk.
             let mut writer = encoder.write_header()?;
             writer.write_image_data(&pixels)?;
-            // `writer` is dropped here → IEND chunk is written.
-        }
+        } // ← IEND flushed here
 
         Ok(JpegPipeline {
-            inner: PipelineInner::Encoded { output },
-            _state: std::marker::PhantomData,
+            stage: PristineStream { output },
         })
     }
 }
@@ -264,17 +243,14 @@ impl JpegPipeline<DisarmedMatrix> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl JpegPipeline<PristineStream> {
-    /// Consume the terminal stage and return ownership of the sanitised output
-    /// bytes to the caller.
+    /// Consume the terminal stage and transfer ownership of the sanitised
+    /// output bytes to the caller.
     ///
-    /// The returned `Vec<u8>` is a valid, self-contained PNG file.  It shares
-    /// no bytes with the original input and contains zero metadata.
+    /// The returned `Vec<u8>` is a valid, self-contained PNG.  It shares
+    /// **zero** bytes with the original JPEG input and contains no metadata.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
-        match self.inner {
-            PipelineInner::Encoded { output } => output,
-            _ => unreachable!("PristineStream pipeline cannot hold raw or decoded data"),
-        }
+        self.stage.output
     }
 }
 
@@ -284,8 +260,11 @@ impl JpegPipeline<PristineStream> {
 
 /// Sanitise a JPEG byte slice end-to-end in a single call.
 ///
-/// This is the primary public surface for the JPEG sanitizer.  It chains all
-/// three pipeline stages and returns the pristine PNG output.
+/// Chains all three pipeline stages:
+///   1. `JpegPipeline::<RawPayload>::new(input)` — zero-copy borrow.
+///   2. `.decode()`                               — decode to pixel matrix.
+///   3. `.reconstruct()`                          — re-encode as PNG.
+///   4. `.into_bytes()`                           — transfer output ownership.
 ///
 /// # Example
 /// ```rust,no_run
@@ -301,31 +280,5 @@ impl JpegPipeline<PristineStream> {
 ///
 /// [`CdrError`]: crate::errors::CdrError
 pub fn sanitize_jpeg(input: &[u8]) -> Result<Vec<u8>, CdrError> {
-    JpegPipeline::<RawPayload>::new(input)
-        .decode()?
-        .reconstruct()?
-        .into_bytes()
-        .pipe(Ok)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Internal pipe helper (avoids a temporary binding)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Tiny extension trait that lets us write `value.pipe(f)` instead of `f(value)`.
-/// Keeps the linear pipeline expression readable.
-trait Pipe: Sized {
-    fn pipe<F, R>(self, f: F) -> R
-    where
-        F: FnOnce(Self) -> R;
-}
-
-impl<T> Pipe for T {
-    #[inline(always)]
-    fn pipe<F, R>(self, f: F) -> R
-    where
-        F: FnOnce(Self) -> R,
-    {
-        f(self)
-    }
+    Ok(JpegPipeline::new(input).decode()?.reconstruct()?.into_bytes())
 }

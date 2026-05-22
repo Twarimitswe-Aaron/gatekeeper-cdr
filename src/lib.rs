@@ -20,6 +20,9 @@
 //  4. Typed errors only: all fallible functions return Result<_, CdrError>.
 //     CdrError is defined via `thiserror` with zero String allocations.
 //
+//  5. Slice-equality sniffing: magic-byte checks use direct subslice comparisons
+//     (`payload[..N] == MAGIC`) — no intermediate stack buffers, no copies.
+//
 //  Supported formats (Phase 1 & 2)
 //  ──────────────────────────────────
 //    • JPEG  — full decode + PNG re-encode pipeline
@@ -113,55 +116,42 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
         return Err(CdrError::PayloadTooShort { got: payload.len() });
     }
 
-    // ── Read first 8 bytes into a stack buffer ────────────────────────────
-    //
-    // We copy into a fixed-size array rather than taking subslice references
-    // so all magic evaluation stays on the stack with no indirection.
-    let mut head8: [u8; 8] = [0u8; 8];
-    head8.copy_from_slice(&payload[..8]);
-
     // ── JPEG detection ────────────────────────────────────────────────────
     //
-    // SOI is at offset 0.  A 2-byte stack array is sufficient.
-    let mut soi_buf: [u8; 2] = [0u8; 2];
-    soi_buf.copy_from_slice(&payload[..2]);
-
-    if soi_buf == JPEG_SOI {
-        // Structural check: scan the final 2 bytes for the EOI marker.
-        // We take the tail directly from the slice — no heap needed.
-        let tail_start = payload.len() - 2;
-        let mut eoi_buf: [u8; 2] = [0u8; 2];
-        eoi_buf.copy_from_slice(&payload[tail_start..]);
-
-        if eoi_buf != JPEG_EOI {
+    // Direct subslice equality — no copy, no intermediate buffer.
+    // The compiler may materialise a 2-byte load into a register; no stack
+    // variable is written to memory.
+    if payload[..2] == JPEG_SOI {
+        // Structural check: the EOI marker must occupy the final 2 bytes.
+        // `payload.len() >= MIN_SNIFF_LEN` guarantees the sub is safe.
+        let tail = payload.len() - 2;
+        if payload[tail..] != JPEG_EOI {
             return Err(CdrError::JpegMissingEoi);
         }
-
         return Ok(FileFormat::Jpeg);
     }
 
     // ── PNG detection ─────────────────────────────────────────────────────
     //
-    // The PNG 8-byte signature occupies bytes 0–7.
-    if head8 == PNG_SIG {
+    // Compare all 8 signature bytes at once via slice equality — one
+    // SIMD-friendly comparison, zero copies.
+    if payload[..8] == PNG_SIG {
         // Structural check: the PNG chunk layout after the 8-byte signature is:
         //   bytes  8–11 → chunk data length (4-byte big-endian u32)
         //   bytes 12–15 → chunk type (ASCII letters, e.g. "IHDR")
         //
-        // We read the chunk type at offset 12.  MIN_SNIFF_LEN = 16 guarantees
-        // this slice is always in-bounds.
-        let mut ihdr_buf: [u8; 4] = [0u8; 4];
-        ihdr_buf.copy_from_slice(&payload[12..16]);
-
-        if ihdr_buf != PNG_IHDR {
+        // MIN_SNIFF_LEN = 16 guarantees offset 12–16 is always in-bounds.
+        if payload[12..16] != PNG_IHDR {
             return Err(CdrError::PngMissingIhdr);
         }
-
         return Ok(FileFormat::Png);
     }
 
     // ── Unknown — capture first 4 bytes for error context ─────────────────
-    let mut magic: [u8; 4] = [0u8; 4];
+    //
+    // A single fixed-size copy only for the error path; hot path never
+    // reaches this branch.
+    let mut magic = [0u8; 4];
     magic.copy_from_slice(&payload[..4]);
     Err(CdrError::UnknownFormat { magic })
 }
@@ -190,12 +180,13 @@ pub fn disarm(payload: &[u8]) -> Result<Vec<u8>, CdrError> {
     match sniff_format(payload)? {
         FileFormat::Jpeg => sanitizers::jpeg::sanitize_jpeg(payload),
         FileFormat::Png => {
-            // Phase 3 will add a full PNG decode + re-encode pipeline here.
-            // For now we forward the slice unmodified so Phase 1/2 can be
-            // exercised end-to-end without a compilation gap.
+            // ── Phase 3 stub ──────────────────────────────────────────────
             //
-            // ⚠  This is a deliberate stub — do NOT ship as production code.
-            Ok(payload.to_vec())
+            // A full PNG decode + pixel-matrix re-encode pipeline will land
+            // in Phase 3.  Until then we return a hard error rather than
+            // forwarding unsanitised bytes to the caller — forwarding would
+            // violate the zero-trust contract (V4 from the audit).
+            Err(CdrError::Unimplemented { format: "PNG" })
         }
     }
 }

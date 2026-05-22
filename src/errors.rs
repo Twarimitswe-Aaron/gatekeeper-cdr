@@ -95,4 +95,17 @@ pub enum CdrError {
         #[from]
         source: png::EncodingError,
     },
+
+    // ── Stage 0 – Unimplemented format stub ───────────────────────────────
+
+    /// The format was recognised but its sanitisation pipeline has not yet
+    /// been implemented.
+    ///
+    /// Using `&'static str` keeps the error zero-allocation; the format name
+    /// is always a compile-time constant (e.g. `"PNG"`).
+    ///
+    /// This variant is intentionally returned instead of forwarding the raw
+    /// input to the caller, which would violate the zero-trust contract.
+    #[error("format '{format}' is recognised but its CDR pipeline is not yet implemented")]
+    Unimplemented { format: &'static str },
 }
