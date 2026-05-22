@@ -5,30 +5,36 @@
 //
 //  Architectural contracts
 //  ────────────────────────
-//  1. Zero-copy where feasible: format detection operates entirely on a
-//     caller-supplied &[u8] slice.  No heap allocation occurs until the
-//     sanitizer pipeline explicitly requires it for the output buffer.
+//  1. Zero-copy parsing: format detection operates entirely on the caller's
+//     &[u8] slice via direct subslice equality (payload[..N] == MAGIC).
+//     No intermediate buffers, no Vec, no heap allocation in the sniffer.
 //
-//  2. Typestate enforcement: every format-specific sanitizer module exposes a
-//     pipeline struct parameterised over stage marker types (RawPayload,
-//     DisarmedMatrix, PristineStream).  Invalid stage transitions are rejected
-//     at compile time, not at runtime.
+//  2. Newtype typestate pipeline: every sanitizer module defines its stages
+//     as NEWTYPE TUPLE STRUCTS (e.g. RawPayload<'a>(&'a [u8])).  Inner data
+//     is accessible only via formal destructuring (let TypeName(x) = val;)
+//     — never via dot-navigation.  Stage transitions are consuming methods;
+//     calling them out of order is a compile error, not a runtime panic.
 //
-//  3. Stack-first primitives: magic byte evaluation uses fixed-size arrays on
-//     the stack (e.g. [u8; 8], [u8; 12]).  No Vec is constructed for sniffing.
+//  3. Nominal output token: the terminal pipeline stage yields SanitizedOutput,
+//     a distinct public newtype.  Any save/persist function that requires a
+//     sanitised file MUST accept SanitizedOutput — passing a raw Vec<u8> or
+//     any intermediate stage type is rejected by the compiler.
 //
 //  4. Typed errors only: all fallible functions return Result<_, CdrError>.
-//     CdrError is defined via `thiserror` with zero String allocations.
+//     CdrError is defined via `thiserror` with zero String allocations in
+//     any variant — every branch carries fixed-cost typed data.
 //
-//  5. Slice-equality sniffing: magic-byte checks use direct subslice comparisons
-//     (`payload[..N] == MAGIC`) — no intermediate stack buffers, no copies.
+//  5. Unimplemented stubs fail closed: formats whose pipeline is not yet
+//     implemented (e.g. PNG in Phase 3) return Err(CdrError::Unimplemented)
+//     rather than forwarding unsanitised bytes to the caller.
 //
 //  Supported formats (Phase 1 & 2)
 //  ──────────────────────────────────
-//    • JPEG  — full decode + PNG re-encode pipeline
-//    • PNG   — structural validation (stub; full pipeline in Phase 3)
+//    • JPEG  — full decode + PNG re-encode pipeline  (complete)
+//    • PNG   — structural validation only             (Phase 3 stub)
 //
 // ─────────────────────────────────────────────────────────────────────────────
+
 
 pub mod errors;
 pub mod sanitizers;

@@ -78,32 +78,46 @@ Gatekeeper enforces a strict **zero-copy architecture** at the format-detection 
 caller buffer (&[u8])
        │
        ▼
- sniff_format()   ← stack-only arrays [u8; N], zero heap allocation
+ sniff_format()   ← direct slice equality payload[..N] == MAGIC, zero heap
        │
        ▼
- disarm()         ← one heap copy into ZCursor for the decoder
+ disarm()         ← ZCursor borrows the slice; no copy until decode
        │
        ▼
- sanitizer        ← one heap allocation for the output Vec<u8>
+ sanitizer        ← one heap allocation for the decoded pixel buffer
+       │
+       ▼
+SanitizedOutput   ← one heap allocation for the re-encoded PNG output
 ```
 
-The sniffer evaluates file magic using **fixed-size stack arrays** (`[u8; 2]`, `[u8; 8]`, `[u8; 4]`). No `Vec` is constructed until the final output buffer.
+The sniffer compares magic bytes using **direct subslice equality** (`payload[..2] == JPEG_SOI`). No intermediate buffers or `Vec` are constructed during format detection — the comparison resolves in a single register-level load.
 
 ### Typestate Pipeline
 
-Every sanitizer enforces its stage transitions at **compile time** using Rust's typestate pattern. Calling stages out of order is a **compile error**, not a runtime panic.
+Every sanitizer enforces its stage transitions at **compile time** using Rust's typestate pattern with **newtype tuple structs**. Calling stages out of order is a **compile error**, not a runtime panic. Passing raw bytes to a save routine is also a **compile error** — only `SanitizedOutput` is accepted.
 
 ```
-JpegPipeline<RawPayload>
-       │  .decode()          — zune-jpeg discards all APP/EXIF/COM markers
+RawPayload<'a>(&'a [u8])       – zero-copy borrow; no data written
+       │  .decode()              – zune-jpeg decodes; all APP/EXIF/COM discarded
        ▼
-JpegPipeline<DisarmedMatrix>
-       │  .reconstruct()     — png encoder writes IHDR + IDAT + IEND only
+DisarmedMatrix(PixelMatrix)    – opaque wrapper; only formal destructuring allowed
+       │  .reconstruct()         – png encoder writes IHDR + IDAT + IEND only
        ▼
-JpegPipeline<PristineStream>
+PristineStream(Vec<u8>)        – opaque wrapper; shares zero bytes with input
+       │  .into_sanitized()
+       ▼
+SanitizedOutput(Vec<u8>)       – public token; only type a save routine may accept
        │  .into_bytes()
        ▼
-     Vec<u8>                 — caller-owned, metadata-free PNG
+     Vec<u8>                    – caller-owned, metadata-free PNG
+```
+
+Inside the crate, inner values are always extracted via the formal pattern:
+```rust
+let RawPayload(bytes)   = stage;  // not stage.bytes
+let DisarmedMatrix(mat) = stage;  // not stage.0 or stage.pixels
+let PristineStream(buf) = stage;  // not stage.output
+let SanitizedOutput(v)  = output; // not output.0
 ```
 
 ### Error Model
@@ -112,16 +126,17 @@ All errors are defined in [`src/errors.rs`](src/errors.rs) as a single `CdrError
 
 ```rust
 pub enum CdrError {
-    PayloadTooShort { got: usize },
-    UnknownFormat   { magic: [u8; 4] },
+    PayloadTooShort      { got: usize },
+    UnknownFormat        { magic: [u8; 4] },
     JpegMissingEoi,
     PngMissingIhdr,
-    JpegDecodeFailed  { source: zune_jpeg::errors::DecodeErrors },
-    PngDecodeFailed   { source: png::DecodingError },
+    JpegDecodeFailed     { source: zune_jpeg::errors::DecodeErrors },
+    PngDecodeFailed      { source: png::DecodingError },
     MissingImageInfo,
     DegenerateDimensions { width: u16, height: u16 },
     PixelBufferMismatch  { expected: usize, got: usize },
-    PngEncodeFailed   { source: png::EncodingError },
+    PngEncodeFailed      { source: png::EncodingError },
+    Unimplemented        { format: &'static str },  // stub — fails closed
 }
 ```
 
@@ -264,16 +279,29 @@ gatekeeper = { path = "../gatekeeper" }
 
 ### API Reference
 
-#### `gatekeeper::disarm(payload: &[u8]) -> Result<Vec<u8>, CdrError>`
+#### `gatekeeper::disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError>`
 
-The primary entry point. Detects format, runs the full CDR pipeline, returns clean bytes.
+The primary entry point. Detects format, runs the full CDR pipeline, and returns a `SanitizedOutput` token — a distinct type that can only be produced by a completed pipeline run.
 
 ```rust
 use gatekeeper::disarm;
 
 let raw = std::fs::read("untrusted.jpg")?;
-let clean = disarm(&raw)?; // Returns a sanitized PNG
-std::fs::write("clean.png", clean)?;
+let clean = disarm(&raw)?;            // Returns SanitizedOutput, not Vec<u8>
+std::fs::write("clean.png", clean.into_bytes())?;
+```
+
+To enforce that a save function only ever accepts sanitised data:
+
+```rust
+use gatekeeper::{disarm, sanitizers::jpeg::SanitizedOutput};
+
+fn save(file: SanitizedOutput) {      // raw Vec<u8> cannot be passed here
+    std::fs::write("out.png", file.into_bytes()).unwrap();
+}
+
+let raw = std::fs::read("untrusted.jpg")?;
+save(disarm(&raw)?);
 ```
 
 #### `gatekeeper::sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError>`
@@ -289,14 +317,15 @@ match sniff_format(&bytes)? {
 }
 ```
 
-#### `gatekeeper::sanitizers::jpeg::sanitize_jpeg(input: &[u8]) -> Result<Vec<u8>, CdrError>`
+#### `gatekeeper::sanitizers::jpeg::sanitize_jpeg(input: &[u8]) -> Result<SanitizedOutput, CdrError>`
 
 Call the JPEG sanitizer directly, bypassing the format sniffer.
 
 ```rust
 use gatekeeper::sanitizers::jpeg::sanitize_jpeg;
 
-let clean_png = sanitize_jpeg(&jpeg_bytes)?;
+let output = sanitize_jpeg(&jpeg_bytes)?;  // Returns SanitizedOutput
+let clean_png = output.into_bytes();
 ```
 
 ---
