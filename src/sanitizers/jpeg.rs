@@ -54,11 +54,25 @@ use zune_jpeg::JpegDecoder;
 //  Internal geometry record (not a stage type — a plain data bag)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Raw pixel geometry extracted from the JPEG decoder.
+/// Raw pixel geometry produced by the JPEG decoder and consumed by the PNG
+/// encoder.
+///
+/// ## Field order and layout
+/// `#[repr(C)]` pins the field order to the declaration order, making the
+/// struct safe to expose through FFI in a future phase without silent
+/// reordering.  On a 64-bit target the layout is:
+///
+/// ```text
+/// offset  0: pixels  (Vec<u8>)  — 24 bytes (ptr 8 + len 8 + cap 8)
+/// offset 24: width   (u32)      —  4 bytes
+/// offset 28: height  (u32)      —  4 bytes
+/// total:                          32 bytes, zero padding
+/// ```
 ///
 /// Kept private to this module.  Callers never see or touch these fields
-/// directly; they are consumed in a single destructuring at the start of
-/// `reconstruct()`.
+/// directly; they are consumed in a single named destructuring at the start
+/// of `reconstruct()`.
+#[repr(C)]
 struct PixelMatrix {
     /// Flat, interleaved RGB bytes; 3 bytes per pixel, row-major.
     pixels: Vec<u8>,

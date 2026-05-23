@@ -62,9 +62,82 @@ const PNG_IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52]; // "IHDR"
 /// Minimum byte count required to inspect enough magic and structure to make a
 /// reliable format determination without false positives.
 ///
-/// 16 bytes is the minimum needed to read the PNG IHDR chunk type field
-/// at offset 12–15.  All other formats are identified within fewer bytes.
+/// 16 bytes covers:
+///   • JPEG: 2-byte SOI at offset 0
+///   • PNG:  8-byte signature + 4-byte IHDR length + 4-byte IHDR type (offset 12)
 const MIN_SNIFF_LEN: usize = 16;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PngChunkHeader — named layout struct for the first PNG chunk header
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A zero-copy, borrowed view over the 8-byte PNG chunk header that begins
+/// immediately after the 8-byte PNG file signature.
+///
+/// ## PNG chunk wire layout (§5.3 of ISO/IEC 15948:2004)
+/// ```text
+/// offset  0– 3  (bytes  8–11 from file start): chunk data length (big-endian u32)
+/// offset  4– 7  (bytes 12–15 from file start): chunk type (4 ASCII bytes)
+/// offset  8–N   (bytes 16–N  from file start): chunk data (length bytes)
+/// offset  N+0–3 (after data):                  CRC-32 (4 bytes)
+/// ```
+///
+/// ## Memory layout
+/// `PngChunkHeader<'a>` borrows directly from the caller's slice; it makes
+/// **zero copies** and occupies only two pointer-width words on the stack
+/// (`&[u8]` = ptr + len).  Field accesses compile to direct byte-offset
+/// reads.
+///
+/// ## Offset constants
+/// The named constants below pin the field positions relative to the start
+/// of the chunk header (i.e., byte 8 of the file), preventing magic-number
+/// drift if the layout is ever extended.
+pub struct PngChunkHeader<'a> {
+    /// Slice of exactly 8 bytes starting at file offset 8.
+    raw: &'a [u8; 8],
+}
+
+impl<'a> PngChunkHeader<'a> {
+    // ── Byte offsets relative to the start of the chunk header ────────────
+    // (not relative to file start — those are +8 from these values)
+    const LENGTH_OFFSET: usize = 0; // bytes 0–3: big-endian u32 chunk length
+    const TYPE_OFFSET:   usize = 4; // bytes 4–7: 4-byte ASCII chunk type
+
+    /// Borrow a `PngChunkHeader` view from a payload slice.
+    ///
+    /// `payload` must be at least `MIN_SNIFF_LEN` (16) bytes.  The chunk
+    /// header starts at byte 8 of a PNG file (immediately after the 8-byte
+    /// file signature).
+    ///
+    /// Returns `None` if the slice is too short to safely index bytes 8–15.
+    #[inline]
+    pub fn from_payload(payload: &'a [u8]) -> Option<Self> {
+        // We need exactly bytes 8..16.  TryFrom<&[u8]> for &[u8; 8] is
+        // available in stable Rust and produces a compile-time-sized borrow.
+        payload.get(8..16)?.try_into().ok().map(|raw| Self { raw })
+    }
+
+    /// The declared data length of this chunk (big-endian u32).
+    ///
+    /// For the IHDR chunk the specification mandates this value is 13.
+    /// We surface it here so callers can validate it without needing to
+    /// know the byte offset.
+    #[inline]
+    #[must_use]
+    pub fn data_length(&self) -> u32 {
+        let bytes = &self.raw[Self::LENGTH_OFFSET..Self::LENGTH_OFFSET + 4];
+        u32::from_be_bytes(bytes.try_into().expect("slice is exactly 4 bytes"))
+    }
+
+    /// The 4-byte chunk type tag (e.g. `b"IHDR"`, `b"IDAT"`, `b"IEND"`).
+    #[inline]
+    #[must_use]
+    pub fn chunk_type(&self) -> &[u8; 4] {
+        self.raw[Self::TYPE_OFFSET..Self::TYPE_OFFSET + 4]
+            .try_into()
+            .expect("slice is exactly 4 bytes")
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  FileFormat — typed result of format sniffing
@@ -143,12 +216,18 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
     // Compare all 8 signature bytes at once via slice equality — one
     // SIMD-friendly comparison, zero copies.
     if payload[..8] == PNG_SIG {
-        // Structural check: the PNG chunk layout after the 8-byte signature is:
-        //   bytes  8–11 → chunk data length (4-byte big-endian u32)
-        //   bytes 12–15 → chunk type (ASCII letters, e.g. "IHDR")
+        // Structural check: parse the first chunk header as a named struct.
+        // PngChunkHeader borrows directly from the payload — no allocation.
         //
-        // MIN_SNIFF_LEN = 16 guarantees offset 12–16 is always in-bounds.
-        if payload[12..16] != PNG_IHDR {
+        // The IHDR chunk is mandatory and must be the first chunk.  Per the
+        // PNG spec its declared data length must be exactly 13.
+        // We validate the chunk type here; full length validation (== 13)
+        // is deferred to the Phase 3 decoder where the complete IHDR data
+        // field is parsed.
+        let header = PngChunkHeader::from_payload(payload)
+            .ok_or(CdrError::PayloadTooShort { got: payload.len() })?;
+
+        if header.chunk_type() != &PNG_IHDR {
             return Err(CdrError::PngMissingIhdr);
         }
         return Ok(FileFormat::Png);
