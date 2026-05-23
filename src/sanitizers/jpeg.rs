@@ -19,25 +19,28 @@
 //  │  *zero* bytes with the input.                                           │
 //  └─────────────────────────────────────────────────────────────────────────┘
 //
-//  Typestate chain (newtype tuple structs)
-//  ────────────────────────────────────────
+//  Public API surface
+//  ───────────────────
 //
 //  RawPayload<'a>(&'a [u8])           – borrows untrusted input; zero copies
-//       │  consumed by JpegPipeline::new()
-//       │  .decode()
+//       │  constructor: RawPayload::new(&bytes)?  validates SOI + EOI markers
+//       │  consuming:   .sanitize()               drives the full CDR pipeline
+//       │
+//  ──── internal pipeline machinery ────────────────────────────────────────────
+//
+//  JpegPipeline<RawPayload<'a>>       – pipeline entry wrapping the borrow
+//       │  .decode()                  – zune-jpeg strips all metadata markers
 //       ▼
-//  DisarmedMatrix(PixelMatrix)        – opaque wrapper around the decoded
-//       │                              pixel matrix; carries no JPEG markers
-//       │  .reconstruct()
+//  JpegPipeline<DisarmedMatrix>       – opaque wrapper; carries no JPEG markers
+//       │  .reconstruct()             – PNG encoder writes IHDR + IDAT + IEND only
 //       ▼
-//  PristineStream(Vec<u8>)            – opaque wrapper around a freshly
-//       │                              encoded PNG; carries zero input bytes
+//  JpegPipeline<PristineStream>       – opaque wrapper; shares zero bytes with input
 //       │  .into_sanitized()
 //       ▼
-//  SanitizedOutput(Vec<u8>)           – public terminal token.  Only a
-//                                       completed pipeline can produce this
-//                                       type.  `fn save(f: SanitizedOutput)`
-//                                       is the only compilable save call.
+//  SanitizedOutput(Vec<u8>)           – public terminal token; also exported as
+//   aka DisarmedPayload                  DisarmedPayload (Phase 1–3 spec name).
+//                                        `fn save(f: DisarmedPayload)` is the
+//                                        only compilable save call.
 //
 //  All stage types are NEWTYPE TUPLE STRUCTS.  Inner data is accessible only
 //  via the `let TypeName(inner) = value;` destructuring pattern — never via
@@ -49,6 +52,25 @@ use crate::errors::CdrError;
 use png::{BitDepth, ColorType, Encoder};
 use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  JPEG magic byte constants (module-private, stack-allocated)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// JPEG Start-Of-Image (SOI) marker.  Every valid JPEG bitstream begins
+/// with these two bytes (ISO/IEC 10918-1 §B.1.1).
+const SOI: [u8; 2] = [0xFF, 0xD8];
+
+/// JPEG End-Of-Image (EOI) marker.  Every complete JPEG bitstream ends
+/// with these two bytes.  Absence of EOI indicates a truncated or
+/// polyglot-container file.
+const EOI: [u8; 2] = [0xFF, 0xD9];
+
+/// Minimum byte length required to validate a JPEG signature.
+/// SOI (2 bytes) + at least one payload byte + EOI (2 bytes) = 5 bytes.
+/// We use 4 as the hard floor since a 2-byte SOI and 2-byte EOI with
+/// nothing between them is structurally degenerate but parseable.
+const MIN_JPEG_LEN: usize = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal geometry record (not a stage type — a plain data bag)
@@ -95,7 +117,125 @@ struct PixelMatrix {
 /// The lifetime `'a` ensures the pipeline cannot outlive the buffer it
 /// borrows.  This invariant is enforced by the Rust borrow checker, not by a
 /// runtime check.
+///
+/// ## Construction
+/// Use [`RawPayload::new`] — it validates the JPEG magic bytes and EOI
+/// marker before wrapping the slice.  The constructor is the only way to
+/// produce a `RawPayload`; there is no public field and no unsafe bypass.
+///
+/// ## Consumption
+/// Call [`RawPayload::sanitize`] to drive the full CDR pipeline.  `sanitize`
+/// takes `self` by value, rendering the original object permanently invalid
+/// at compile time — the borrow checker prevents any further use of a
+/// consumed `RawPayload`.
 pub struct RawPayload<'a>(&'a [u8]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  RawPayload behaviour: constructor + consuming sanitize()
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'a> RawPayload<'a> {
+    /// Validate JPEG magic bytes and wrap the input slice in `RawPayload<'a>`.
+    ///
+    /// ## What this validates
+    /// 1. **Minimum length** — `input` must be at least [`MIN_JPEG_LEN`] (4) bytes.
+    /// 2. **SOI marker** — `input[0..2]` must equal `\xFF\xD8` (JPEG start-of-image).
+    /// 3. **EOI marker** — `input[input.len()-2..]` must equal `\xFF\xD9` (JPEG
+    ///    end-of-image).  Absence of EOI is a strong indicator of a truncated or
+    ///    polyglot-container file.
+    ///
+    /// ## Zero-copy guarantee
+    /// `new` borrows `input` without copying any bytes.  All three checks
+    /// resolve against the caller's existing buffer; no heap allocation occurs.
+    ///
+    /// ## Errors
+    /// * [`CdrError::PayloadTooShort`] — input shorter than [`MIN_JPEG_LEN`] bytes.
+    /// * [`CdrError::UnknownFormat`]   — SOI marker absent.
+    /// * [`CdrError::JpegMissingEoi`]  — EOI marker absent from the tail.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use gatekeeper::sanitizers::jpeg::RawPayload;
+    ///
+    /// let bytes = std::fs::read("suspicious.jpg").unwrap();
+    /// let payload = RawPayload::new(&bytes).expect("not a valid JPEG");
+    /// ```
+    pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
+        // ── Guard: minimum length ─────────────────────────────────────────
+        if input.len() < MIN_JPEG_LEN {
+            return Err(CdrError::PayloadTooShort { got: input.len() });
+        }
+
+        // ── Guard: SOI marker — direct subslice equality, zero copy ───────
+        //
+        // The compiler resolves `input[..2] == SOI` as a 2-byte register
+        // comparison; no intermediate buffer is written to the stack.
+        if input[..2] != SOI {
+            // Capture the first 4 bytes as error context.  We know `input`
+            // is at least MIN_JPEG_LEN bytes, so the indexing is safe.
+            let mut magic = [0u8; 4];
+            magic.copy_from_slice(&input[..4]);
+            return Err(CdrError::UnknownFormat { magic });
+        }
+
+        // ── Guard: EOI marker — tail check, zero copy ─────────────────────
+        //
+        // A missing EOI is the primary indicator of a polyglot container
+        // (e.g. a JPEG with a ZIP or PDF appended after the image data).
+        // Rejecting at this stage prevents the decoder from ever receiving
+        // a file with trailing executable bytes.
+        let tail = input.len() - 2;
+        if input[tail..] != EOI {
+            return Err(CdrError::JpegMissingEoi);
+        }
+
+        Ok(Self(input))
+    }
+
+    /// Run the full CDR pipeline and return a [`DisarmedPayload`] terminal token.
+    ///
+    /// ## Ownership semantics
+    /// `sanitize` takes `self` **by value** (`self`, not `&self` or `&mut self`).
+    /// This is an intentional security constraint: once called, the original
+    /// `RawPayload` is moved and permanently destroyed.  The Rust compiler
+    /// will reject any attempt to use the consumed `RawPayload` after this
+    /// call — no runtime check needed.
+    ///
+    /// ## Pipeline steps
+    /// 1. Feeds the borrowed slice into `JpegPipeline::new()` (zero copy).
+    /// 2. `decode()` passes the slice to `zune-jpeg` via `ZCursor` (zero
+    ///    copy into the decoder).  The decoder discards every APP/EXIF/COM
+    ///    marker and returns a flat RGB pixel buffer (one mandatory alloc).
+    /// 3. `reconstruct()` re-encodes the pixel buffer as a lossless PNG
+    ///    containing only IHDR + IDAT + IEND — no metadata (one alloc).
+    /// 4. `into_sanitized()` wraps the PNG buffer in `SanitizedOutput`,
+    ///    which is also exported as [`DisarmedPayload`].
+    ///
+    /// ## Errors
+    /// Propagates any [`CdrError`] from the decode or reconstruct stages.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use gatekeeper::sanitizers::jpeg::RawPayload;
+    ///
+    /// let bytes = std::fs::read("suspicious.jpg").unwrap();
+    /// let clean = RawPayload::new(&bytes)
+    ///     .expect("not a valid JPEG")
+    ///     .sanitize()
+    ///     .expect("CDR pipeline failed");
+    /// std::fs::write("clean.png", clean.into_bytes()).unwrap();
+    /// ```
+    pub fn sanitize(self) -> Result<DisarmedPayload, CdrError> {
+        // Formal destructure — extracts the inner &'a [u8] without dot-access.
+        let RawPayload(bytes) = self;
+        // Feed into the existing JpegPipeline machinery.  The compiler
+        // verifies stage ordering at zero runtime cost.
+        Ok(JpegPipeline::new(bytes)
+            .decode()?
+            .reconstruct()?
+            .into_sanitized())
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Stage 1: DisarmedMatrix — newtype tuple struct
@@ -139,15 +279,18 @@ pub struct PristineStream(Vec<u8>);
 /// is private; callers extract the bytes via the formal pattern
 /// `let SanitizedOutput(bytes) = output;` or call `.into_bytes()`.
 ///
+/// Also exported as [`DisarmedPayload`] — the name used in the Phases 1–3
+/// specification.  Both names refer to the identical type.
+///
 /// ## Signature lockdown
 ///
 /// Any persistence / storage function that should only accept sanitised data
-/// **must** declare its parameter as `SanitizedOutput`:
+/// **must** declare its parameter as `SanitizedOutput` (or `DisarmedPayload`):
 ///
 /// ```rust,no_run
-/// use gatekeeper::sanitizers::jpeg::SanitizedOutput;
+/// use gatekeeper::sanitizers::jpeg::DisarmedPayload;
 ///
-/// fn save_to_storage(file: SanitizedOutput) {
+/// fn save_to_storage(file: DisarmedPayload) {
 ///     // Extract the bytes via the public API — the inner field is private.
 ///     let bytes = file.into_bytes();
 ///     // … write `bytes` to disk / object store …
@@ -162,6 +305,32 @@ pub struct PristineStream(Vec<u8>);
 /// the compiler rejects all such call sites without even running.
 #[derive(Debug)]
 pub struct SanitizedOutput(Vec<u8>);
+
+/// Type alias: `DisarmedPayload` is the Phase 1–3 specification name for
+/// [`SanitizedOutput`] — the nominal terminal token produced when a `RawPayload`
+/// successfully completes the full CDR pipeline.
+///
+/// Both names refer to the identical type.  `DisarmedPayload` is the
+/// ergonomic name for JPEG-pipeline consumers; `SanitizedOutput` is the
+/// format-agnostic name used at the crate level in `disarm()`.
+///
+/// ## Usage
+/// ```rust,no_run
+/// use gatekeeper::sanitizers::jpeg::{RawPayload, DisarmedPayload};
+///
+/// fn save(payload: DisarmedPayload) {
+///     let bytes = payload.into_bytes();
+///     std::fs::write("clean.png", bytes).unwrap();
+/// }
+///
+/// let raw = std::fs::read("untrusted.jpg").unwrap();
+/// let clean: DisarmedPayload = RawPayload::new(&raw)
+///     .expect("invalid JPEG")
+///     .sanitize()
+///     .expect("CDR failed");
+/// save(clean);
+/// ```
+pub type DisarmedPayload = SanitizedOutput;
 
 impl SanitizedOutput {
     /// Consume the token and return ownership of the sanitised bytes.
@@ -369,32 +538,32 @@ impl JpegPipeline<PristineStream> {
 //  Public convenience entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sanitise a JPEG byte slice end-to-end, returning a [`SanitizedOutput`] token.
+/// Sanitise a JPEG byte slice end-to-end, returning a [`DisarmedPayload`] token.
 ///
-/// The caller receives a `SanitizedOutput`, not a raw `Vec<u8>`.  Any storage
-/// routine can enforce that it only accepts this token:
+/// This is a convenience wrapper over [`RawPayload::new`] and
+/// [`RawPayload::sanitize`].  Prefer the method chain when you want to
+/// keep a named `RawPayload` binding for clarity:
 ///
 /// ```rust,no_run
-/// use gatekeeper::sanitizers::jpeg::{sanitize_jpeg, SanitizedOutput};
+/// use gatekeeper::sanitizers::jpeg::{RawPayload, DisarmedPayload};
 ///
-/// fn save_to_storage(file: SanitizedOutput) {
-///     // into_bytes() is the public API for extracting the clean buffer.
-///     let bytes = file.into_bytes();
-///     std::fs::write("clean.png", bytes).unwrap();
-/// }
-///
+/// // Method chain (explicit, preferred for complex pipelines):
 /// let raw = std::fs::read("suspicious.jpg").unwrap();
-/// let clean = sanitize_jpeg(&raw).expect("CDR failed");
-/// save_to_storage(clean); // ← only compiles because `clean` is SanitizedOutput
+/// let clean: DisarmedPayload = RawPayload::new(&raw)
+///     .expect("invalid JPEG")
+///     .sanitize()
+///     .expect("CDR failed");
+///
+/// // Free function (convenient for one-liners):
+/// use gatekeeper::sanitizers::jpeg::sanitize_jpeg;
+/// let clean2 = sanitize_jpeg(&raw).expect("CDR failed");
 /// ```
 ///
 /// # Errors
-/// Propagates any [`CdrError`] from the decode or reconstruct stages.
+/// Propagates any [`CdrError`] from [`RawPayload::new`] or
+/// [`RawPayload::sanitize`].
 ///
 /// [`CdrError`]: crate::errors::CdrError
-pub fn sanitize_jpeg(input: &[u8]) -> Result<SanitizedOutput, CdrError> {
-    Ok(JpegPipeline::new(input)
-        .decode()?
-        .reconstruct()?
-        .into_sanitized())
+pub fn sanitize_jpeg(input: &[u8]) -> Result<DisarmedPayload, CdrError> {
+    RawPayload::new(input)?.sanitize()
 }
