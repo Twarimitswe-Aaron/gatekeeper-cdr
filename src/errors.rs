@@ -56,17 +56,11 @@ pub enum CdrError {
     /// large internal zune type, while still preserving full Display/Debug
     /// through the source chain.
     #[error("JPEG decode failure: {source}")]
-    JpegDecodeFailed {
-        #[from]
-        source: zune_jpeg::errors::DecodeErrors,
-    },
+    JpegDecodeFailed { source: zune_jpeg::errors::DecodeErrors },
 
     /// The PNG decoder surfaced a structural error in the input stream.
     #[error("PNG decode failure: {source}")]
-    PngDecodeFailed {
-        #[from]
-        source: png::DecodingError,
-    },
+    PngDecodeFailed { source: png::DecodingError },
 
     // ── Stage 3 – Pixel-geometry validation ───────────────────────────────
 
@@ -78,7 +72,25 @@ pub enum CdrError {
 
     /// Width or height reported by the decoder is zero.
     #[error("image has degenerate dimensions: {width}×{height}")]
-    DegenerateDimensions { width: u16, height: u16 },
+    DegenerateDimensions { width: u32, height: u32 },
+
+    /// A single image axis (width or height) exceeds the per-dimension safety
+    /// cap.  The cap prevents integer-overflow in geometry arithmetic and
+    /// limits the worst-case allocation before the pixel budget check fires.
+    ///
+    /// `dimension` is the offending axis length; `limit` is the cap in pixels.
+    #[error("image dimension too large: {dimension}px exceeds the safety cap of {limit}px")]
+    DimensionTooLarge { dimension: u32, limit: u32 },
+
+    /// The decoded pixel buffer would exceed the maximum allowed byte count.
+    ///
+    /// This is the primary decompression-bomb guard: a compressed file can
+    /// claim enormous dimensions that result in a multi-gigabyte allocation.
+    /// Gatekeeper rejects such files before a single allocation is made.
+    ///
+    /// `bytes` is the computed pixel budget; `limit` is the safety cap.
+    #[error("image pixel budget too large: {bytes} bytes exceeds the safety cap of {limit} bytes")]
+    ImageTooLarge { bytes: usize, limit: usize },
 
     /// The decoded pixel buffer length is inconsistent with the reported image
     /// geometry.  `expected` and `got` are byte counts.
@@ -91,10 +103,7 @@ pub enum CdrError {
     /// buffer.  In practice this signals an internal logic fault because the
     /// output is a `Vec<u8>`.
     #[error("PNG re-encode failure: {source}")]
-    PngEncodeFailed {
-        #[from]
-        source: png::EncodingError,
-    },
+    PngEncodeFailed { source: png::EncodingError },
 
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
 

@@ -63,6 +63,22 @@ const PNG_IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52];
 /// 8-byte sig + 4-byte IHDR length + 4-byte IHDR type = 16 bytes.
 const MIN_PNG_LEN: usize = 16;
 
+/// Maximum allowed width or height per axis.
+///
+/// 16 384 px per side covers 16K resolution images, well above any
+/// real-world upload whilst preventing integer-overflow in geometry
+/// arithmetic.  A 16384×16384 RGBA image would be 1 GiB — caught next
+/// by the pixel-budget guard before any allocation is made.
+const MAX_DIMENSION: u32 = 16_384;
+
+/// Maximum allowed decoded pixel buffer size (decompression bomb guard).
+///
+/// 256 MiB accommodates a 9102×9102 RGBA image — generous for uploads
+/// but hard enough to prevent multi-gigabyte allocation attacks.
+/// This limit is checked against the computed geometry, before the
+/// `vec!` initialisation, so no allocation occurs on rejection.
+const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal geometry record (module-private, not a stage type)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,15 +312,24 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
 
         // `read_info()` parses all chunks up to the first IDAT, discarding
         // every ancillary chunk automatically (tEXt, iTXt, iCCP, bKGD, etc.).
-        let mut reader = decoder.read_info()?;
+        let mut reader = decoder.read_info().map_err(|e| CdrError::PngDecodeFailed { source: e })?;
 
         // ── Geometry validation ───────────────────────────────────────────
         let info = reader.info();
 
+        // G4: PNG widths are u32 natively — no cast needed, no truncation risk.
         if info.width == 0 || info.height == 0 {
             return Err(CdrError::DegenerateDimensions {
-                width:  info.width  as u16,
-                height: info.height as u16,
+                width:  info.width,
+                height: info.height,
+            });
+        }
+
+        // G2: per-axis dimension cap — fires before the budget multiplication.
+        if info.width > MAX_DIMENSION || info.height > MAX_DIMENSION {
+            return Err(CdrError::DimensionTooLarge {
+                dimension: info.width.max(info.height),
+                limit:     MAX_DIMENSION,
             });
         }
 
@@ -313,10 +338,7 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         let width      = info.width;
         let height     = info.height;
 
-        // Bytes per pixel determined from color type and bit depth.
-        // All standard combinations: {1,2,3,4} channels × {8,16} bits.
-        // We only support 8-bit output here; 16-bit is down-sampled by
-        // the png crate automatically when re-encoding at 8-bit.
+        // Compute our expected byte count from the decoder-reported geometry.
         let channels: usize = color_type.samples();
         let bits: usize     = bit_depth as usize;
         let bytes_per_row   = (width as usize)
@@ -328,18 +350,34 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
             .checked_mul(height as usize)
             .unwrap_or(usize::MAX);
 
-        // ── Decode: mandatory single allocation ───────────────────────────
-        //
-        // `Vec::with_capacity(expected)` pre-sizes to avoid growth loops.
-        let mut pixels = vec![0u8; expected];
-        reader.next_frame(&mut pixels)?;
+        // G1: decompression bomb guard — reject before any allocation.
+        if expected > MAX_PIXEL_BYTES {
+            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+        }
 
-        if pixels.len() != expected {
+        // G3 fix: cross-check our manual geometry calculation against the
+        // decoder's own `output_buffer_size()`.  If they disagree the file
+        // has internally inconsistent geometry — reject it.
+        //
+        // This replaces the previous dead assertion
+        //   `if pixels.len() != expected { ... }`
+        // which could never fire because `vec![0u8; expected]` sets
+        // `.len() == expected` by construction before next_frame is called.
+        let decoder_expected = reader.output_buffer_size();
+        if decoder_expected != expected {
             return Err(CdrError::PixelBufferMismatch {
                 expected,
-                got: pixels.len(),
+                got: decoder_expected,
             });
         }
+
+        // ── Decode: mandatory single allocation ───────────────────────────
+        //
+        // `next_frame` requires a &mut [u8] of exactly `output_buffer_size()`
+        // bytes.  We've confirmed expected == decoder_expected above.
+        let mut pixels = vec![0u8; expected];
+        reader.next_frame(&mut pixels).map_err(|e| CdrError::PngDecodeFailed { source: e })?;
+        // pixels.len() == expected by construction — no further assertion needed.
 
         Ok(PngPipeline {
             stage: DisarmedPngMatrix(PngPixelMatrix {
@@ -396,8 +434,10 @@ impl PngPipeline<DisarmedPngMatrix> {
             encoder.set_depth(bit_depth);
             // No metadata methods called — encoder writes IHDR only.
 
-            let mut writer = encoder.write_header()?; // emits PNG sig + IHDR
-            writer.write_image_data(&pixels)?;         // emits IDAT
+            let mut writer = encoder.write_header()
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR
+            writer.write_image_data(&pixels)
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits IDAT
         } // ← drop flushes IEND
 
         Ok(PngPipeline {

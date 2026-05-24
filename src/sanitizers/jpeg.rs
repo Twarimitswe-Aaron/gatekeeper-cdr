@@ -72,6 +72,22 @@ const EOI: [u8; 2] = [0xFF, 0xD9];
 /// nothing between them is structurally degenerate but parseable.
 const MIN_JPEG_LEN: usize = 4;
 
+/// Maximum allowed width or height per axis.
+///
+/// 16 384 px per side covers 16K resolution images, well above any
+/// real-world upload whilst preventing integer-overflow in geometry
+/// arithmetic.  A 16384×16384 RGBA image would be 1 GiB — caught next
+/// by the pixel-budget guard before any allocation is made.
+const MAX_DIMENSION: u32 = 16_384;
+
+/// Maximum allowed decoded pixel buffer size (decompression bomb guard).
+///
+/// 256 MiB accommodates a 9102×9102 RGBA image — generous for uploads
+/// but hard enough to prevent multi-gigabyte allocation attacks.
+/// This limit is checked against the computed geometry, before the
+/// `Vec::with_capacity` call, so no allocation occurs on rejection.
+const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal geometry record (not a stage type — a plain data bag)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -439,24 +455,40 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         //
         // `decode()` returns a fresh `Vec<u8>` of interleaved RGB triples.
         // All JPEG markers are consumed by the internal DCT engine.
-        let pixels = decoder.decode()?;
+        let pixels = decoder.decode()
+            .map_err(|e| CdrError::JpegDecodeFailed { source: e })?;
 
         // ── Geometry validation ───────────────────────────────────────────
         let info = decoder.info().ok_or(CdrError::MissingImageInfo)?;
 
-        if info.width == 0 || info.height == 0 {
-            return Err(CdrError::DegenerateDimensions {
-                width: info.width,
-                height: info.height,
+        // G4: use u32 throughout — zune-jpeg reports u16 but DegenerateDimensions
+        // now carries u32 to avoid silent truncation on wide images.
+        let w = info.width  as u32;
+        let h = info.height as u32;
+
+        if w == 0 || h == 0 {
+            return Err(CdrError::DegenerateDimensions { width: w, height: h });
+        }
+
+        // G2: per-axis dimension cap — fires before the budget multiplication.
+        if w > MAX_DIMENSION || h > MAX_DIMENSION {
+            return Err(CdrError::DimensionTooLarge {
+                dimension: w.max(h),
+                limit:     MAX_DIMENSION,
             });
         }
 
         // RGB = 3 bytes per pixel.  Checked multiplication to avoid overflow
         // on pathological width × height values.
-        let expected = (info.width as usize)
-            .checked_mul(info.height as usize)
+        let expected = (w as usize)
+            .checked_mul(h as usize)
             .and_then(|n| n.checked_mul(3))
             .unwrap_or(usize::MAX);
+
+        // G1: decompression bomb guard — reject before any allocation.
+        if expected > MAX_PIXEL_BYTES {
+            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+        }
 
         if pixels.len() != expected {
             return Err(CdrError::PixelBufferMismatch {
@@ -468,8 +500,8 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         Ok(JpegPipeline {
             stage: DisarmedMatrix(PixelMatrix {
                 pixels,
-                width: info.width as u32,
-                height: info.height as u32,
+                width:  w,
+                height: h,
             }),
         })
     }
@@ -514,8 +546,10 @@ impl JpegPipeline<DisarmedMatrix> {
             encoder.set_color(ColorType::Rgb);
             encoder.set_depth(BitDepth::Eight);
 
-            let mut writer = encoder.write_header()?; // emits PNG sig + IHDR
-            writer.write_image_data(&pixels)?;         // emits IDAT
+            let mut writer = encoder.write_header()
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR
+            writer.write_image_data(&pixels)
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits IDAT
         } // ← drop flushes IEND
 
         Ok(JpegPipeline {
