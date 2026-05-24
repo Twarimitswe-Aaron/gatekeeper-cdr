@@ -24,14 +24,10 @@
 //     CdrError is defined via `thiserror` with zero String allocations in
 //     any variant — every branch carries fixed-cost typed data.
 //
-//  5. Unimplemented stubs fail closed: formats whose pipeline is not yet
-//     implemented (e.g. PNG in Phase 3) return Err(CdrError::Unimplemented)
-//     rather than forwarding unsanitised bytes to the caller.
-//
-//  Supported formats (Phase 1 & 2)
+//  Supported formats (Phase 1, 2 & 3)
 //  ──────────────────────────────────
 //    • JPEG  — full decode + PNG re-encode pipeline  (complete)
-//    • PNG   — structural validation only             (Phase 3 stub)
+//    • PNG   — full decode + PNG re-encode pipeline  (complete)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -45,6 +41,7 @@ pub use errors::CdrError;
 pub use sniffer::{disarm, sniff_format, FileFormat};
 pub use stream::ImageStream;
 pub use sanitizers::jpeg::{SanitizedOutput, DisarmedPayload, sanitize_jpeg};
+pub use sanitizers::png::sanitize_png;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unit tests
@@ -238,15 +235,56 @@ mod tests {
         );
     }
 
-    /// A PNG stub must reach the PNG pipeline arm and return `Unimplemented`
-    /// (the Phase 3 fail-closed stub), not `UnknownFormat`.
+    /// A PNG stub passed to the sniff layer passes the structural check but the
+    /// truncated fixture is rejected by the decoder.  We assert the error is
+    /// NOT `UnknownFormat` or `Unimplemented` — routing reached the PNG arm.
     #[test]
-    fn image_stream_routes_png_to_stub() {
+    fn image_stream_routes_png_to_pipeline() {
         let png = minimal_png_stub();
         let result = ImageStream::new(&png).route();
+        // minimal_png_stub is structurally valid (sig + IHDR) but has no IDAT,
+        // so the decoder returns PngDecodeFailed — not Unimplemented or UnknownFormat.
         assert!(
-            matches!(result, Err(CdrError::Unimplemented { format: "PNG" })),
-            "expected Unimplemented(PNG), got {result:?}"
+            !matches!(result, Err(CdrError::UnknownFormat { .. })),
+            "PNG stub was mis-routed to UnknownFormat: {result:?}"
+        );
+        assert!(
+            !matches!(result, Err(CdrError::Unimplemented { .. })),
+            "PNG pipeline is not yet wired: {result:?}"
+        );
+    }
+
+    /// Build a real 1×1 red RGB PNG in memory using the `png` encoder,
+    /// then run it through the full CDR pipeline.  The output must be an
+    /// `Ok(SanitizedOutput)` whose bytes decode as a valid PNG.
+    #[test]
+    fn png_cdr_round_trip() {
+        use png::{BitDepth, ColorType, Encoder};
+
+        // ── Build a real 1×1 RGB PNG fixture ─────────────────────────────
+        let mut fixture: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut fixture, 1, 1);
+            enc.set_color(ColorType::Rgb);
+            enc.set_depth(BitDepth::Eight);
+            let mut writer = enc.write_header().expect("encoder header");
+            writer.write_image_data(&[0xFF, 0x00, 0x00]).expect("pixel write"); // red pixel
+        }
+
+        // ── Run the full CDR pipeline ─────────────────────────────────────
+        let result = disarm(&fixture);
+        assert!(
+            result.is_ok(),
+            "PNG CDR round-trip failed: {result:?}"
+        );
+
+        // ── Verify the output is a valid PNG ──────────────────────────────
+        let clean = result.unwrap().into_bytes();
+        // Every valid PNG starts with the 8-byte signature.
+        assert_eq!(
+            &clean[..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            "sanitized output does not begin with PNG signature"
         );
     }
 }

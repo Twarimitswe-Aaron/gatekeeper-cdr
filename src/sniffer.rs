@@ -24,6 +24,7 @@
 
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::{sanitize_jpeg, SanitizedOutput};
+use crate::sanitizers::png::sanitize_png;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -239,14 +240,6 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
     match sniff_format(payload)? {
         FileFormat::Jpeg => sanitize_jpeg(payload),
-        FileFormat::Png  => {
-            // ── Phase 3 stub ──────────────────────────────────────────────
-            //
-            // A full PNG decode + pixel-matrix re-encode pipeline will land
-            // in Phase 3.  Until then we return a hard error rather than
-            // forwarding unsanitised bytes to the caller — forwarding would
-            // violate the zero-trust contract.
-            Err(CdrError::Unimplemented { format: "PNG" })
-        }
+        FileFormat::Png => sanitize_png(payload),
     }
 }

@@ -353,6 +353,19 @@ impl SanitizedOutput {
         bytes
     }
 
+    /// Intra-crate constructor for sibling sanitizer modules (e.g. `png.rs`).
+    ///
+    /// `pub(crate)` — visible only within the `gatekeeper` crate.  External
+    /// callers and FFI bindings cannot call this; they receive `SanitizedOutput`
+    /// only from the top-level `disarm()` or format-specific `sanitize_*` fns.
+    ///
+    /// The `_crate_` prefix makes intra-crate construction obviously distinct
+    /// from the validated pipeline path in code review.
+    #[inline]
+    pub(crate) fn _crate_new(bytes: Vec<u8>) -> Self {
+        SanitizedOutput(bytes)
+    }
+
     /// **Test-only** constructor that bypasses the pipeline.
     ///
     /// Prefixed `_test_only` to make misuse obvious in code review.
