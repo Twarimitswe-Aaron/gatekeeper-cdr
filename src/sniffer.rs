@@ -159,11 +159,26 @@ pub enum FileFormat {
 /// | JPEG   | bytes[0..2] == SOI   | EOI marker present in the final two bytes          |
 /// | PNG    | bytes[0..8] == sig   | IHDR chunk type at bytes 12–15                     |
 ///
+/// # Examples
+///
+/// ```rust,no_run
+/// use gatekeeper::{sniff_format, FileFormat};
+///
+/// // Happy path — a file that is a valid JPEG.
+/// let raw = std::fs::read("image.jpg").unwrap();
+/// match sniff_format(&raw) {
+///     Ok(FileFormat::Jpeg) => println!("JPEG confirmed"),
+///     Ok(FileFormat::Png)  => println!("PNG confirmed"),
+///     Err(e)               => eprintln!("rejected: {e}"),
+/// }
+/// ```
+///
 /// # Errors
 /// * [`CdrError::PayloadTooShort`] — `payload.len() < MIN_SNIFF_LEN`.
 /// * [`CdrError::UnknownFormat`]   — leading bytes match no known magic.
 /// * [`CdrError::JpegMissingEoi`]  — JPEG magic present but EOI absent.
 /// * [`CdrError::PngMissingIhdr`]  — PNG signature present but IHDR absent.
+
 pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
     // ── Guard: minimum length ─────────────────────────────────────────────
     if payload.len() < MIN_SNIFF_LEN {

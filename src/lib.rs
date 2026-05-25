@@ -1,47 +1,77 @@
-// ─────────────────────────────────────────────────────────────────────────────
-//  gatekeeper :: lib
-//
-//  Content Disarm and Reconstruction (CDR) Engine — public crate surface.
-//
-//  Architectural contracts
-//  ────────────────────────
-//  1. Zero-copy parsing: format detection operates entirely on the caller's
-//     &[u8] slice via direct subslice equality (payload[..N] == MAGIC).
-//     No intermediate buffers, no Vec, no heap allocation in the sniffer.
-//
-//  2. Newtype typestate pipeline: every sanitizer module defines its stages
-//     as NEWTYPE TUPLE STRUCTS (e.g. RawPayload<'a>(&'a [u8])).  Inner data
-//     is accessible only via formal destructuring (let TypeName(x) = val;)
-//     — never via dot-navigation.  Stage transitions are consuming methods;
-//     calling them out of order is a compile error, not a runtime panic.
-//
-//  3. Nominal output token: the terminal pipeline stage yields SanitizedOutput,
-//     a distinct public newtype.  Any save/persist function that requires a
-//     sanitised file MUST accept SanitizedOutput — passing a raw Vec<u8> or
-//     any intermediate stage type is rejected by the compiler.
-//
-//  4. Typed errors only: all fallible functions return Result<_, CdrError>.
-//     CdrError is defined via `thiserror` with zero String allocations in
-//     any variant — every branch carries fixed-cost typed data.
-//
-//  Supported formats (Phase 1, 2 & 3)
-//  ──────────────────────────────────
-//    • JPEG  — full decode + PNG re-encode pipeline  (complete)
-//    • PNG   — full decode + PNG re-encode pipeline  (complete)
-//
-// ─────────────────────────────────────────────────────────────────────────────
+//! # Gatekeeper CDR Engine
+//!
+//! A **zero-trust Content Disarm and Reconstruction (CDR) engine** for
+//! multi-format file sanitisation.  Gatekeeper accepts an untrusted byte
+//! slice, fully decodes it to raw pixel data, and re-encodes a clean output
+//! that shares **zero bytes** with the original — stripping all metadata,
+//! steganographic payloads, and polyglot-container trailing bytes.
+//!
+//! ## Architectural contracts
+//!
+//! 1. **Zero-copy parsing** — format detection operates entirely on the
+//!    caller's `&[u8]` slice via direct subslice equality.
+//!    No intermediate buffers, no `Vec`, no heap allocation in the sniffer.
+//!
+//! 2. **Newtype typestate pipeline** — every sanitiser module defines its
+//!    stages as newtype tuple structs (e.g. `RawPayload<'a>(&'a [u8])`).
+//!    Inner data is accessible only via formal destructuring; stage
+//!    transitions are **consuming methods** — calling them out of order is
+//!    a *compile error*, not a runtime panic.
+//!
+//! 3. **Nominal output token** — the terminal pipeline stage yields
+//!    [`SanitizedOutput`], a distinct public newtype.  Any save/persist
+//!    function that requires a sanitised file **must** accept
+//!    `SanitizedOutput`; passing a raw `Vec<u8>` is rejected by the compiler.
+//!
+//! 4. **Typed errors only** — all fallible functions return
+//!    `Result<_, CdrError>`.  [`CdrError`] is defined via `thiserror` with
+//!    zero `String` allocations in any variant.
+//!
+//! ## Supported formats
+//!
+//! | Format | Status |
+//! |--------|--------|
+//! | JPEG   | complete (decode → PNG re-encode) |
+//! | PNG    | complete (decode → PNG re-encode) |
+//!
+//! ## Quick start
+//!
+//! ```rust,no_run
+//! use gatekeeper::disarm;
+//!
+//! let raw = std::fs::read("untrusted.jpg").unwrap();
+//! let clean = disarm(&raw).expect("CDR failed");
+//! std::fs::write("clean.png", clean.into_bytes()).unwrap();
+//! ```
 
 pub mod errors;
 pub mod sanitizers;
 pub mod sniffer;
 pub mod stream;
 
-// Re-export public API surface items to keep the crate root clean and backward-compatible.
+// ── Public API facade ────────────────────────────────────────────────────────
+// All items below are re-exported at the crate root so downstream consumers
+// never need to reach into internal module paths.
+
+/// Primary CDR error taxonomy — re-exported from [`errors`].
 pub use errors::CdrError;
+
+/// Top-level CDR entry point and format discriminant — re-exported from [`sniffer`].
 pub use sniffer::{disarm, sniff_format, FileFormat};
+
+/// Streaming, optional-payload wrapper — re-exported from [`stream`].
 pub use stream::ImageStream;
-pub use sanitizers::jpeg::{SanitizedOutput, DisarmedPayload, sanitize_jpeg};
+
+/// Terminal sanitised-output token and its JPEG-pipeline alias.
+pub use sanitizers::jpeg::{DisarmedPayload, SanitizedOutput, sanitize_jpeg};
+
+/// Typestate pipeline entry point for JPEG inputs.
+pub use sanitizers::jpeg::RawPayload;
+/// Convenience free-function CDR entry point for PNG inputs.
 pub use sanitizers::png::sanitize_png;
+
+/// Typestate pipeline entry point for PNG inputs.
+pub use sanitizers::png::RawPngPayload;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unit tests
