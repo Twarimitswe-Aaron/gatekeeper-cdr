@@ -287,4 +287,71 @@ mod tests {
             "sanitized output does not begin with PNG signature"
         );
     }
+
+    /// A PNG whose IHDR claims dimensions that exceed MAX_DIMENSION must be
+    /// rejected with `DimensionTooLarge` before any pixel allocation occurs.
+    ///
+    /// ## Fixture construction
+    /// We use `mem::forget` on the encoder writer to suppress IEND, then
+    /// manually append a zero-length IDAT chunk.  This lets `read_info()`
+    /// complete (it stops when it sees the IDAT chunk-type marker) so our
+    /// geometry guard fires before `next_frame()` is ever called.
+    ///
+    /// CRC32 of the bare chunk-type bytes b"IDAT" = 0x35AF061E — a well-known
+    /// PNG constant, precomputed offline.
+    #[test]
+    fn rejects_png_decompression_bomb() {
+        use png::{BitDepth, ColorType, Encoder};
+
+        let mut fixture: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut fixture, 16_385, 16_385);
+            enc.set_color(ColorType::Rgba);
+            enc.set_depth(BitDepth::Eight);
+            let writer = enc.write_header().expect("header write");
+            // Suppress IEND: dropping `writer` would write it, preventing
+            // our guards from being reached.
+            std::mem::forget(writer);
+        }
+        // Append a minimal zero-length IDAT so `read_info()` can return
+        // successfully with the geometry metadata.
+        fixture.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // chunk length = 0
+        fixture.extend_from_slice(b"IDAT");                    // chunk type
+        fixture.extend_from_slice(&[0x35, 0xAF, 0x06, 0x1E]); // CRC32(b"IDAT")
+
+        let result = sanitize_png(&fixture);
+        assert!(
+            matches!(result, Err(CdrError::DimensionTooLarge { .. })),
+            "expected DimensionTooLarge for 16385×16385 PNG, got {result:?}"
+        );
+    }
+
+    /// A PNG at exactly MAX_DIMENSION (16 384 px) per axis with 4 RGBA
+    /// channels = 16384 × 16384 × 4 = 1 GiB — exceeds MAX_PIXEL_BYTES
+    /// (256 MiB).  Must be rejected with `ImageTooLarge`.
+    ///
+    /// 16384 ≤ MAX_DIMENSION so `DimensionTooLarge` must NOT fire;
+    /// `ImageTooLarge` must fire at the budget check that follows.
+    #[test]
+    fn rejects_png_at_max_dimension_rgba() {
+        use png::{BitDepth, ColorType, Encoder};
+
+        let mut fixture: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut fixture, 16_384, 16_384);
+            enc.set_color(ColorType::Rgba); // 4 channels → 1 GiB pixel budget
+            enc.set_depth(BitDepth::Eight);
+            let writer = enc.write_header().expect("header write");
+            std::mem::forget(writer); // suppress IEND
+        }
+        fixture.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        fixture.extend_from_slice(b"IDAT");
+        fixture.extend_from_slice(&[0x35, 0xAF, 0x06, 0x1E]);
+
+        let result = sanitize_png(&fixture);
+        assert!(
+            matches!(result, Err(CdrError::ImageTooLarge { .. })),
+            "expected ImageTooLarge for 16384×16384 RGBA PNG, got {result:?}"
+        );
+    }
 }
