@@ -11,6 +11,12 @@
 use gatekeeper::{disarm, sniff_format};
 use std::{env, fs, path::Path, process};
 
+/// Maximum file size the CLI will read into memory.
+///
+/// Mirrors the library-level `MAX_COMPRESSED_BYTES` in the sanitizer modules.
+/// A file larger than this is rejected before `fs::read` allocates anything.
+const MAX_COMPRESSED_BYTES: u64 = 32 * 1024 * 1024; // 32 MiB
+
 
 fn main() {
     // ── Parse CLI args ────────────────────────────────────────────────────

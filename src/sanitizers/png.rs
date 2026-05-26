@@ -79,6 +79,13 @@ const MAX_DIMENSION: u32 = 16_384;
 /// `vec!` initialisation, so no allocation occurs on rejection.
 const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 
+/// Maximum allowed compressed input size.
+///
+/// 32 MiB is a generous ceiling for real-world PNG uploads.  The check
+/// fires in `RawPngPayload::new()` — before any decoder work begins — so
+/// a multi-gigabyte malicious upload never reaches the parser.
+const MAX_COMPRESSED_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal geometry record (module-private, not a stage type)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,16 +147,18 @@ impl<'a> RawPngPayload<'a> {
     /// Validate PNG magic bytes and wrap the input slice in `RawPngPayload<'a>`.
     ///
     /// ## What this validates
-    /// 1. **Minimum length** — `input` must be at least [`MIN_PNG_LEN`] (16) bytes.
-    /// 2. **PNG signature** — `input[0..8]` must equal the 8-byte PNG signature.
-    /// 3. **IHDR presence** — `input[12..16]` must equal `b"IHDR"`, confirming the
+    /// 1. **Maximum size** — `input` must not exceed [`MAX_COMPRESSED_BYTES`] (32 MiB).
+    /// 2. **Minimum length** — `input` must be at least [`MIN_PNG_LEN`] (16) bytes.
+    /// 3. **PNG signature** — `input[0..8]` must equal the 8-byte PNG signature.
+    /// 4. **IHDR presence** — `input[12..16]` must equal `b"IHDR"`, confirming the
     ///    first chunk is well-formed.
     ///
     /// ## Zero-copy guarantee
-    /// `new` borrows `input` without copying any bytes.  All three checks
+    /// `new` borrows `input` without copying any bytes.  All four checks
     /// resolve against the caller's existing buffer; no heap allocation occurs.
     ///
     /// ## Errors
+    /// * [`CdrError::PayloadTooLarge`] — input larger than [`MAX_COMPRESSED_BYTES`].
     /// * [`CdrError::PayloadTooShort`] — input shorter than [`MIN_PNG_LEN`] bytes.
     /// * [`CdrError::UnknownFormat`]   — PNG signature absent.
     /// * [`CdrError::PngMissingIhdr`]  — IHDR chunk absent at offset 12.
@@ -162,6 +171,17 @@ impl<'a> RawPngPayload<'a> {
     /// let payload = RawPngPayload::new(&bytes).expect("not a valid PNG");
     /// ```
     pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
+        // ── Guard: maximum compressed input size ──────────────────────────
+        //
+        // Fires FIRST — before length or magic checks — so a multi-gigabyte
+        // upload never reaches the PNG parser at all.
+        if input.len() > MAX_COMPRESSED_BYTES {
+            return Err(CdrError::PayloadTooLarge {
+                got:   input.len(),
+                limit: MAX_COMPRESSED_BYTES,
+            });
+        }
+
         // ── Guard: minimum length ─────────────────────────────────────────
         if input.len() < MIN_PNG_LEN {
             return Err(CdrError::PayloadTooShort { got: input.len() });
@@ -310,8 +330,18 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         let cursor = std::io::Cursor::new(bytes);
         let decoder = Decoder::new(cursor);
 
-        // `read_info()` parses all chunks up to the first IDAT, discarding
-        // every ancillary chunk automatically (tEXt, iTXt, iCCP, bKGD, etc.).
+        // `read_info()` parses all chunks up to the first IDAT.  Ancillary
+        // chunks (tEXt, iTXt, iCCP, bKGD, hIST, etc.) are discarded by the
+        // `png` crate before pixel data is read.
+        //
+        // RESIDUAL SURFACE: the `png` 0.17 crate processes zTXt and iCCP
+        // chunks (which involve zlib decompression) before IDAT is reached.
+        // Hostile ancillary chunks could burn parser CPU before geometry
+        // guards fire.  The `png` 0.17 public API does not expose a way to
+        // suppress ancillary-chunk parsing entirely; this is a known residual
+        // risk documented for tracking.  The MAX_COMPRESSED_BYTES input cap
+        // (32 MiB) bounds the worst-case decompression work to a finite
+        // amount proportional to the compressed input size.
         let mut reader = decoder.read_info().map_err(|e| CdrError::PngDecodeFailed { source: e })?;
 
         // ── Geometry validation ───────────────────────────────────────────
