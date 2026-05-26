@@ -44,6 +44,28 @@ fn main() {
     // ── Read input ────────────────────────────────────────────────────────
     println!("▶ Reading  : {}", input_path.display());
 
+    // Check the on-disk file size BEFORE reading the whole file into memory.
+    // This prevents a multi-GiB malicious upload from exhausting RAM before
+    // the library's PayloadTooLarge guard can fire.
+    let file_size = match fs::metadata(input_path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            eprintln!("✗ Failed to stat file: {e}");
+            process::exit(1);
+        }
+    };
+
+    if file_size > MAX_COMPRESSED_BYTES {
+        eprintln!(
+            "✗ File too large: {} bytes ({:.2} MiB). Maximum is {} bytes ({:.2} MiB).",
+            file_size,
+            file_size as f64 / (1024.0 * 1024.0),
+            MAX_COMPRESSED_BYTES,
+            MAX_COMPRESSED_BYTES as f64 / (1024.0 * 1024.0),
+        );
+        process::exit(1);
+    }
+
     let raw_bytes = match fs::read(input_path) {
         Ok(b) => b,
         Err(e) => {
