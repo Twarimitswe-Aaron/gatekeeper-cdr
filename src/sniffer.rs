@@ -178,7 +178,6 @@ pub enum FileFormat {
 /// * [`CdrError::UnknownFormat`]   — leading bytes match no known magic.
 /// * [`CdrError::JpegMissingEoi`]  — JPEG magic present but EOI absent.
 /// * [`CdrError::PngMissingIhdr`]  — PNG signature present but IHDR absent.
-
 pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
     // ── Guard: minimum length ─────────────────────────────────────────────
     if payload.len() < MIN_SNIFF_LEN {
