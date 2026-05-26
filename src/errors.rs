@@ -29,6 +29,14 @@ pub enum CdrError {
     #[error("payload too short for format detection: got {got} byte(s), need ≥ 12")]
     PayloadTooShort { got: usize },
 
+    /// The supplied byte slice exceeds the maximum allowed compressed input size.
+    ///
+    /// `got` is the number of bytes provided; `limit` is the enforced cap.
+    /// This guard fires before any decoding work begins, preventing
+    /// multi-gigabyte allocations from oversized compressed inputs.
+    #[error("payload too large: got {got} bytes, limit is {limit} bytes")]
+    PayloadTooLarge { got: usize, limit: usize },
+
     /// The magic signature at offset 0 does not match any supported format.
     ///
     /// `magic` captures the first 4 raw bytes for forensic logging without
