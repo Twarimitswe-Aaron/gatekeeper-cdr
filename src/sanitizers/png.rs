@@ -377,8 +377,7 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
             .saturating_add(7) / 8; // round up for < 8-bit depths
 
         let expected = bytes_per_row
-            .checked_mul(height as usize)
-            .unwrap_or(usize::MAX);
+            .saturating_mul(height as usize);
 
         // G1: decompression bomb guard — reject before any allocation.
         if expected > MAX_PIXEL_BYTES {
