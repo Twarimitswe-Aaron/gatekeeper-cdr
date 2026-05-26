@@ -127,13 +127,16 @@ All errors are defined in [`src/errors.rs`](src/errors.rs) as a single `CdrError
 ```rust
 pub enum CdrError {
     PayloadTooShort      { got: usize },
+    PayloadTooLarge      { got: usize, limit: usize },
     UnknownFormat        { magic: [u8; 4] },
     JpegMissingEoi,
     PngMissingIhdr,
     JpegDecodeFailed     { source: zune_jpeg::errors::DecodeErrors },
     PngDecodeFailed      { source: png::DecodingError },
     MissingImageInfo,
-    DegenerateDimensions { width: u16, height: u16 },
+    DegenerateDimensions { width: u32, height: u32 },
+    DimensionTooLarge    { dimension: u32, limit: u32 },
+    ImageTooLarge        { bytes: usize, limit: usize },
     PixelBufferMismatch  { expected: usize, got: usize },
     PngEncodeFailed      { source: png::EncodingError },
     Unimplemented        { format: &'static str },  // stub — fails closed
@@ -147,7 +150,7 @@ pub enum CdrError {
 | Format | Detection | Sanitize | Re-encode | Status |
 |--------|-----------|----------|-----------|--------|
 | JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ PNG output | **Phase 2 — complete** |
-| PNG    | ✅ Magic + IHDR check | 🔧 Planned | 🔧 Planned | Phase 3 |
+| PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG output | **Phase 3 — complete** |
 | GIF    | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 4 |
 | WebP   | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 4 |
 | PDF    | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 5 |
@@ -172,7 +175,8 @@ gatekeeper/
     ├── errors.rs               # CdrError — strongly-typed, zero-alloc error enum
     └── sanitizers/
         ├── mod.rs              # Sanitizer module index
-        └── jpeg.rs             # Full JPEG → pixel matrix → PNG pipeline
+        ├── jpeg.rs             # JPEG → pixel matrix → PNG pipeline
+        └── png.rs              # PNG → pixel matrix → PNG pipeline
 ```
 
 ---
@@ -578,7 +582,7 @@ public class Main {
 
 - [x] **Phase 1** — Cargo manifest, error model, format sniffer
 - [x] **Phase 2** — JPEG sanitization pipeline (typestate + zune-jpeg + png)
-- [ ] **Phase 3** — PNG sanitization pipeline
+- [x] **Phase 3** — PNG sanitization pipeline
 - [ ] **Phase 4** — GIF and WebP support
 - [ ] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
 - [ ] **Phase 6** — DOCX / XLSX / PPTX Office format sanitization
