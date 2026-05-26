@@ -84,9 +84,16 @@ const MAX_DIMENSION: u32 = 16_384;
 ///
 /// 256 MiB accommodates a 9102×9102 RGBA image — generous for uploads
 /// but hard enough to prevent multi-gigabyte allocation attacks.
-/// This limit is checked against the computed geometry, before the
-/// `Vec::with_capacity` call, so no allocation occurs on rejection.
+/// This limit is checked against the computed geometry **before** any
+/// allocation is made (see the two-phase decode in `JpegPipeline::decode`).
 const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+
+/// Maximum allowed compressed input size.
+///
+/// 32 MiB is a generous ceiling for real-world JPEG uploads.  The check
+/// fires in `RawPayload::new()` — before any decoder work begins — so a
+/// multi-gigabyte malicious upload never reaches the parser.
+const MAX_COMPRESSED_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal geometry record (not a stage type — a plain data bag)
@@ -154,17 +161,19 @@ impl<'a> RawPayload<'a> {
     /// Validate JPEG magic bytes and wrap the input slice in `RawPayload<'a>`.
     ///
     /// ## What this validates
-    /// 1. **Minimum length** — `input` must be at least [`MIN_JPEG_LEN`] (4) bytes.
-    /// 2. **SOI marker** — `input[0..2]` must equal `\xFF\xD8` (JPEG start-of-image).
-    /// 3. **EOI marker** — `input[input.len()-2..]` must equal `\xFF\xD9` (JPEG
+    /// 1. **Maximum size** — `input` must not exceed [`MAX_COMPRESSED_BYTES`] (32 MiB).
+    /// 2. **Minimum length** — `input` must be at least [`MIN_JPEG_LEN`] (4) bytes.
+    /// 3. **SOI marker** — `input[0..2]` must equal `\xFF\xD8` (JPEG start-of-image).
+    /// 4. **EOI marker** — `input[input.len()-2..]` must equal `\xFF\xD9` (JPEG
     ///    end-of-image).  Absence of EOI is a strong indicator of a truncated or
     ///    polyglot-container file.
     ///
     /// ## Zero-copy guarantee
-    /// `new` borrows `input` without copying any bytes.  All three checks
+    /// `new` borrows `input` without copying any bytes.  All four checks
     /// resolve against the caller's existing buffer; no heap allocation occurs.
     ///
     /// ## Errors
+    /// * [`CdrError::PayloadTooLarge`] — input larger than [`MAX_COMPRESSED_BYTES`].
     /// * [`CdrError::PayloadTooShort`] — input shorter than [`MIN_JPEG_LEN`] bytes.
     /// * [`CdrError::UnknownFormat`]   — SOI marker absent.
     /// * [`CdrError::JpegMissingEoi`]  — EOI marker absent from the tail.
@@ -177,6 +186,17 @@ impl<'a> RawPayload<'a> {
     /// let payload = RawPayload::new(&bytes).expect("not a valid JPEG");
     /// ```
     pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
+        // ── Guard: maximum compressed input size ──────────────────────────
+        //
+        // This fires FIRST — before any length or magic check — so a
+        // multi-gigabyte upload never reaches the parser or decoder at all.
+        if input.len() > MAX_COMPRESSED_BYTES {
+            return Err(CdrError::PayloadTooLarge {
+                got:   input.len(),
+                limit: MAX_COMPRESSED_BYTES,
+            });
+        }
+
         // ── Guard: minimum length ─────────────────────────────────────────
         if input.len() < MIN_JPEG_LEN {
             return Err(CdrError::PayloadTooShort { got: input.len() });
@@ -425,21 +445,28 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
 
     /// Advance from `RawPayload` to `DisarmedMatrix`.
     ///
-    /// ## What this does
-    /// 1. Extracts the borrowed slice via **formal destructuring**
-    ///    `let RawPayload(bytes) = self.stage;`.
-    /// 2. Wraps it in a `ZCursor` (zero allocation) for `zune-jpeg`.
-    /// 3. Decodes to an interleaved RGB pixel buffer, discarding every JPEG
-    ///    structural marker (APP0-APP15, EXIF, ICC, COM, DRI).
-    /// 4. Validates pixel-buffer geometry against the decoder-reported
-    ///    dimensions.
-    /// 5. Wraps the result in `DisarmedMatrix(PixelMatrix { … })`.
+    /// ## Two-phase decode protocol (decompression-bomb hardening)
+    ///
+    /// This method uses a deliberate two-phase approach to ensure **all**
+    /// geometry guards fire **before** the pixel buffer is allocated:
+    ///
+    /// 1. **`decode_headers()`** — parses every JFIF/EXIF/APP marker block
+    ///    and populates `decoder.info()`.  No pixel data is decoded; no
+    ///    pixel-sized allocation is made.
+    /// 2. **Geometry gauntlet** — [`CdrError::DegenerateDimensions`],
+    ///    [`CdrError::DimensionTooLarge`], and [`CdrError::ImageTooLarge`]
+    ///    all fire here, against header-only data.  A bomb image is rejected
+    ///    without a single pixel byte ever being written to the heap.
+    /// 3. **`decode()`** — only reached for images that passed every guard.
+    ///    Allocates and fills the interleaved RGB pixel buffer.
     ///
     /// ## Errors
-    /// * [`CdrError::JpegDecodeFailed`] — invalid bitstream.
-    /// * [`CdrError::MissingImageInfo`] — decoder returned no geometry.
+    /// * [`CdrError::JpegDecodeFailed`]    — invalid bitstream (either phase).
+    /// * [`CdrError::MissingImageInfo`]    — decoder returned no geometry after headers.
     /// * [`CdrError::DegenerateDimensions`] — zero width or height.
-    /// * [`CdrError::PixelBufferMismatch`] — buffer size ≠ geometry.
+    /// * [`CdrError::DimensionTooLarge`]   — axis exceeds [`MAX_DIMENSION`].
+    /// * [`CdrError::ImageTooLarge`]       — pixel budget exceeds [`MAX_PIXEL_BYTES`].
+    /// * [`CdrError::PixelBufferMismatch`] — decoded buffer size ≠ geometry.
     pub fn decode(self) -> Result<JpegPipeline<DisarmedMatrix>, CdrError> {
         // ── Formal destructure — no dot-access ───────────────────────────
         let RawPayload(bytes) = self.stage;
@@ -451,18 +478,24 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         let cursor = ZCursor::new(bytes);
         let mut decoder = JpegDecoder::new_with_options(cursor, options);
 
-        // ── Decode: mandatory single allocation ───────────────────────────
+        // ── Phase 1: header-only parse ────────────────────────────────────
         //
-        // `decode()` returns a fresh `Vec<u8>` of interleaved RGB triples.
-        // All JPEG markers are consumed by the internal DCT engine.
-        let pixels = decoder.decode()
+        // `decode_headers()` consumes every JFIF/APP0–APP15/EXIF/COM marker
+        // and records image geometry in the decoder's internal state.  It
+        // does NOT decode DCT coefficients or allocate a pixel buffer.
+        // After this call `decoder.info()` is populated.
+        decoder.decode_headers()
             .map_err(|e| CdrError::JpegDecodeFailed { source: e })?;
 
-        // ── Geometry validation ───────────────────────────────────────────
+        // ── Geometry validation (pre-allocation) ──────────────────────────
+        //
+        // All three guards fire here — against header data only.
+        // If any guard fires the decoder is dropped without ever having
+        // allocated a pixel buffer.
         let info = decoder.info().ok_or(CdrError::MissingImageInfo)?;
 
-        // G4: use u32 throughout — zune-jpeg reports u16 but DegenerateDimensions
-        // now carries u32 to avoid silent truncation on wide images.
+        // G4: promote to u32 — zune-jpeg reports u16; DegenerateDimensions
+        // and DimensionTooLarge carry u32 to avoid silent truncation.
         let w = info.width  as u32;
         let h = info.height as u32;
 
@@ -470,7 +503,7 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
             return Err(CdrError::DegenerateDimensions { width: w, height: h });
         }
 
-        // G2: per-axis dimension cap — fires before the budget multiplication.
+        // G2: per-axis dimension cap — fires before budget multiplication.
         if w > MAX_DIMENSION || h > MAX_DIMENSION {
             return Err(CdrError::DimensionTooLarge {
                 dimension: w.max(h),
@@ -478,17 +511,25 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
             });
         }
 
-        // RGB = 3 bytes per pixel.  Checked multiplication to avoid overflow
-        // on pathological width × height values.
+        // RGB = 3 bytes per pixel.  Checked multiplication guards overflow.
         let expected = (w as usize)
             .checked_mul(h as usize)
             .and_then(|n| n.checked_mul(3))
             .unwrap_or(usize::MAX);
 
-        // G1: decompression bomb guard — reject before any allocation.
+        // G1: decompression bomb guard — rejects before any allocation.
         if expected > MAX_PIXEL_BYTES {
             return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
         }
+
+        // ── Phase 2: full decode (pixel allocation) ───────────────────────
+        //
+        // Reached only for images that passed all geometry guards above.
+        // `decode()` allocates a fresh `Vec<u8>` of interleaved RGB triples
+        // and runs the DCT engine.  All APP/EXIF/COM markers are discarded
+        // by the decoder — no metadata survives into `pixels`.
+        let pixels = decoder.decode()
+            .map_err(|e| CdrError::JpegDecodeFailed { source: e })?;
 
         if pixels.len() != expected {
             return Err(CdrError::PixelBufferMismatch {
