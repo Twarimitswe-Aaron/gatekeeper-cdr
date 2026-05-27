@@ -39,12 +39,12 @@ zune-core = "0.5"
 # Used in integration tests to generate deterministic synthetic JPEG fixtures
 # without external file I/O.
 
-# 🛠️ Development Configuration (Optimized for active local engineering)
+# Development Configuration (Optimized for active local engineering)
 [profile.dev]
 opt-level = 1       # Light optimizations so loop components run reasonably fast
 debug = true        # Generates complete symbol maps for step-through debugging
 
-# 🚀 Production Release Configuration (Optimized for minimal binary size & safety)
+# Production Release Configuration (Optimized for minimal binary size & safety)
 [profile.release]
 opt-level = 3       # Maximize hardware execution optimizations
 lto = true          # Enables Link-Time Optimization across ALL dependency crates
