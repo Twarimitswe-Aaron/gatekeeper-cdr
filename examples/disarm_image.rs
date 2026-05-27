@@ -17,7 +17,6 @@ use std::{env, fs, path::Path, process};
 /// A file larger than this is rejected before `fs::read` allocates anything.
 const MAX_COMPRESSED_BYTES: u64 = 32 * 1024 * 1024; // 32 MiB
 
-
 fn main() {
     // ── Parse CLI args ────────────────────────────────────────────────────
     let args: Vec<String> = env::args().collect();
@@ -34,10 +33,7 @@ fn main() {
         .map(|s| s.as_str().to_owned())
         .unwrap_or_else(|| {
             // Default: same name, .sanitized.png suffix
-            let stem = input_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
+            let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
             format!("{stem}.sanitized.png")
         });
 
@@ -74,7 +70,11 @@ fn main() {
         }
     };
 
-    println!("  Size     : {} bytes ({:.2} KB)", raw_bytes.len(), raw_bytes.len() as f64 / 1024.0);
+    println!(
+        "  Size     : {} bytes ({:.2} KB)",
+        raw_bytes.len(),
+        raw_bytes.len() as f64 / 1024.0
+    );
 
     // ── Sniff format (preview, non-destructive) ───────────────────────────
     match sniff_format(&raw_bytes) {
@@ -101,7 +101,11 @@ fn main() {
     // for code inside the crate (e.g. a save_to_storage fn in the lib).
     let clean_bytes = sanitized.into_bytes();
 
-    println!("  Output   : {} bytes ({:.2} KB)", clean_bytes.len(), clean_bytes.len() as f64 / 1024.0);
+    println!(
+        "  Output   : {} bytes ({:.2} KB)",
+        clean_bytes.len(),
+        clean_bytes.len() as f64 / 1024.0
+    );
 
     // ── Write output ──────────────────────────────────────────────────────
     println!("▶ Writing  : {output_path}");

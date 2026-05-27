@@ -44,9 +44,10 @@ zune-core = "0.5"
 opt-level = 1       # Light optimizations so loop components run reasonably fast
 debug = true        # Generates complete symbol maps for step-through debugging
 
-# 🚀 Production Release Configuration (Optimized for pure native speed & safety)
+# 🚀 Production Release Configuration (Optimized for minimal binary size & safety)
 [profile.release]
-opt-level = 3       # Maximize hardware execution optimizations
+opt-level = "z"     # Optimize for minimal binary size
 lto = true          # Enables Link-Time Optimization across ALL dependency crates
 codegen-units = 1   # Drops compilation threads to 1, unlocking deeper macro optimizations
 panic = 'abort'     # Strips out stack-unwinding code, dropping binary size significantly
+strip = true        # Strip symbols and debug info from binary

@@ -83,7 +83,9 @@ impl<'a> ImageStream<'a> {
     #[inline]
     #[must_use]
     pub fn new(payload: &'a [u8]) -> Self {
-        Self { payload: Some(payload) }
+        Self {
+            payload: Some(payload),
+        }
     }
 
     /// Wrap an **absent** stream sentinel.

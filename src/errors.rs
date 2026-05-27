@@ -21,7 +21,6 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum CdrError {
     // ── Stage 0 – Format detection ─────────────────────────────────────────
-
     /// The supplied byte slice is too short to contain any recognisable magic.
     ///
     /// `got` is the number of bytes actually provided; the engine requires at
@@ -45,7 +44,6 @@ pub enum CdrError {
     UnknownFormat { magic: [u8; 4] },
 
     // ── Stage 1 – Format validation ────────────────────────────────────────
-
     /// A JPEG SOI marker (0xFF 0xD8) was found but the EOI trailer (0xFF 0xD9)
     /// is absent.  The file is structurally incomplete.
     #[error("JPEG is structurally malformed: SOI present but EOI marker is absent")]
@@ -57,21 +55,21 @@ pub enum CdrError {
     PngMissingIhdr,
 
     // ── Stage 2 – Decoding ─────────────────────────────────────────────────
-
     /// The underlying `zune-jpeg` decoder returned a hard error.
     ///
     /// We box the zune error to avoid polluting the CDR error size with the
     /// large internal zune type, while still preserving full Display/Debug
     /// through the source chain.
     #[error("JPEG decode failure: {source}")]
-    JpegDecodeFailed { source: zune_jpeg::errors::DecodeErrors },
+    JpegDecodeFailed {
+        source: zune_jpeg::errors::DecodeErrors,
+    },
 
     /// The PNG decoder surfaced a structural error in the input stream.
     #[error("PNG decode failure: {source}")]
     PngDecodeFailed { source: png::DecodingError },
 
     // ── Stage 3 – Pixel-geometry validation ───────────────────────────────
-
     /// After decode the decoder reported no image info (width / height /
     /// colorspace).  This should be unreachable on valid input but is captured
     /// here for the zero-trust invariant.
@@ -106,7 +104,6 @@ pub enum CdrError {
     PixelBufferMismatch { expected: usize, got: usize },
 
     // ── Stage 4 – Re-encoding ─────────────────────────────────────────────
-
     /// The PNG encoder returned an I/O error while writing into the output
     /// buffer.  In practice this signals an internal logic fault because the
     /// output is a `Vec<u8>`.
@@ -114,7 +111,6 @@ pub enum CdrError {
     PngEncodeFailed { source: png::EncodingError },
 
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
-
     /// The format was recognised but its sanitisation pipeline has not yet
     /// been implemented.
     ///

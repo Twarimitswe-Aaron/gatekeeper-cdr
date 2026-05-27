@@ -177,7 +177,7 @@ impl<'a> RawPngPayload<'a> {
         // upload never reaches the PNG parser at all.
         if input.len() > MAX_COMPRESSED_BYTES {
             return Err(CdrError::PayloadTooLarge {
-                got:   input.len(),
+                got: input.len(),
                 limit: MAX_COMPRESSED_BYTES,
             });
         }
@@ -342,7 +342,9 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         // risk documented for tracking.  The MAX_COMPRESSED_BYTES input cap
         // (32 MiB) bounds the worst-case decompression work to a finite
         // amount proportional to the compressed input size.
-        let mut reader = decoder.read_info().map_err(|e| CdrError::PngDecodeFailed { source: e })?;
+        let mut reader = decoder
+            .read_info()
+            .map_err(|e| CdrError::PngDecodeFailed { source: e })?;
 
         // ── Geometry validation ───────────────────────────────────────────
         let info = reader.info();
@@ -350,7 +352,7 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         // G4: PNG widths are u32 natively — no cast needed, no truncation risk.
         if info.width == 0 || info.height == 0 {
             return Err(CdrError::DegenerateDimensions {
-                width:  info.width,
+                width: info.width,
                 height: info.height,
             });
         }
@@ -359,29 +361,32 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         if info.width > MAX_DIMENSION || info.height > MAX_DIMENSION {
             return Err(CdrError::DimensionTooLarge {
                 dimension: info.width.max(info.height),
-                limit:     MAX_DIMENSION,
+                limit: MAX_DIMENSION,
             });
         }
 
         let color_type = info.color_type;
-        let bit_depth  = info.bit_depth;
-        let width      = info.width;
-        let height     = info.height;
+        let bit_depth = info.bit_depth;
+        let width = info.width;
+        let height = info.height;
 
         // Compute our expected byte count from the decoder-reported geometry.
         let channels: usize = color_type.samples();
-        let bits: usize     = bit_depth as usize;
-        let bytes_per_row   = (width as usize)
+        let bits: usize = bit_depth as usize;
+        let bytes_per_row = (width as usize)
             .saturating_mul(channels)
             .saturating_mul(bits)
-            .saturating_add(7) / 8; // round up for < 8-bit depths
+            .saturating_add(7)
+            / 8; // round up for < 8-bit depths
 
-        let expected = bytes_per_row
-            .saturating_mul(height as usize);
+        let expected = bytes_per_row.saturating_mul(height as usize);
 
         // G1: decompression bomb guard — reject before any allocation.
         if expected > MAX_PIXEL_BYTES {
-            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+            return Err(CdrError::ImageTooLarge {
+                bytes: expected,
+                limit: MAX_PIXEL_BYTES,
+            });
         }
 
         // G3 fix: cross-check our manual geometry calculation against the
@@ -405,7 +410,9 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         // `next_frame` requires a &mut [u8] of exactly `output_buffer_size()`
         // bytes.  We've confirmed expected == decoder_expected above.
         let mut pixels = vec![0u8; expected];
-        reader.next_frame(&mut pixels).map_err(|e| CdrError::PngDecodeFailed { source: e })?;
+        reader
+            .next_frame(&mut pixels)
+            .map_err(|e| CdrError::PngDecodeFailed { source: e })?;
         // pixels.len() == expected by construction — no further assertion needed.
 
         Ok(PngPipeline {
@@ -463,9 +470,11 @@ impl PngPipeline<DisarmedPngMatrix> {
             encoder.set_depth(bit_depth);
             // No metadata methods called — encoder writes IHDR only.
 
-            let mut writer = encoder.write_header()
+            let mut writer = encoder
+                .write_header()
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR
-            writer.write_image_data(&pixels)
+            writer
+                .write_image_data(&pixels)
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits IDAT
         } // ← drop flushes IEND
 

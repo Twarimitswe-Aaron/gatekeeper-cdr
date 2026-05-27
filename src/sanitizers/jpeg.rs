@@ -192,7 +192,7 @@ impl<'a> RawPayload<'a> {
         // multi-gigabyte upload never reaches the parser or decoder at all.
         if input.len() > MAX_COMPRESSED_BYTES {
             return Err(CdrError::PayloadTooLarge {
-                got:   input.len(),
+                got: input.len(),
                 limit: MAX_COMPRESSED_BYTES,
             });
         }
@@ -484,7 +484,8 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         // and records image geometry in the decoder's internal state.  It
         // does NOT decode DCT coefficients or allocate a pixel buffer.
         // After this call `decoder.info()` is populated.
-        decoder.decode_headers()
+        decoder
+            .decode_headers()
             .map_err(|e| CdrError::JpegDecodeFailed { source: e })?;
 
         // ── Geometry validation (pre-allocation) ──────────────────────────
@@ -496,18 +497,21 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
 
         // G4: promote to u32 — zune-jpeg reports u16; DegenerateDimensions
         // and DimensionTooLarge carry u32 to avoid silent truncation.
-        let w = info.width  as u32;
+        let w = info.width as u32;
         let h = info.height as u32;
 
         if w == 0 || h == 0 {
-            return Err(CdrError::DegenerateDimensions { width: w, height: h });
+            return Err(CdrError::DegenerateDimensions {
+                width: w,
+                height: h,
+            });
         }
 
         // G2: per-axis dimension cap — fires before budget multiplication.
         if w > MAX_DIMENSION || h > MAX_DIMENSION {
             return Err(CdrError::DimensionTooLarge {
                 dimension: w.max(h),
-                limit:     MAX_DIMENSION,
+                limit: MAX_DIMENSION,
             });
         }
 
@@ -519,7 +523,10 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
 
         // G1: decompression bomb guard — rejects before any allocation.
         if expected > MAX_PIXEL_BYTES {
-            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+            return Err(CdrError::ImageTooLarge {
+                bytes: expected,
+                limit: MAX_PIXEL_BYTES,
+            });
         }
 
         // ── Phase 2: full decode (pixel allocation) ───────────────────────
@@ -528,7 +535,8 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         // `decode()` allocates a fresh `Vec<u8>` of interleaved RGB triples
         // and runs the DCT engine.  All APP/EXIF/COM markers are discarded
         // by the decoder — no metadata survives into `pixels`.
-        let pixels = decoder.decode()
+        let pixels = decoder
+            .decode()
             .map_err(|e| CdrError::JpegDecodeFailed { source: e })?;
 
         if pixels.len() != expected {
@@ -541,7 +549,7 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
         Ok(JpegPipeline {
             stage: DisarmedMatrix(PixelMatrix {
                 pixels,
-                width:  w,
+                width: w,
                 height: h,
             }),
         })
@@ -587,9 +595,11 @@ impl JpegPipeline<DisarmedMatrix> {
             encoder.set_color(ColorType::Rgb);
             encoder.set_depth(BitDepth::Eight);
 
-            let mut writer = encoder.write_header()
+            let mut writer = encoder
+                .write_header()
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR
-            writer.write_image_data(&pixels)
+            writer
+                .write_image_data(&pixels)
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits IDAT
         } // ← drop flushes IEND
 

@@ -57,7 +57,7 @@ pub mod stream;
 pub use errors::CdrError;
 
 /// Top-level CDR entry point and format discriminant — re-exported from [`sniffer`].
-pub use sniffer::{disarm, sniff_format, FileFormat};
+pub use sniffer::{FileFormat, disarm, sniff_format};
 
 /// Streaming, optional-payload wrapper — re-exported from [`stream`].
 pub use stream::ImageStream;
@@ -80,7 +80,7 @@ pub use sanitizers::png::RawPngPayload;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sniffer::{PNG_SIG, PNG_IHDR, MIN_SNIFF_LEN, JPEG_EOI};
+    use crate::sniffer::{JPEG_EOI, MIN_SNIFF_LEN, PNG_IHDR, PNG_SIG};
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -298,15 +298,14 @@ mod tests {
             enc.set_color(ColorType::Rgb);
             enc.set_depth(BitDepth::Eight);
             let mut writer = enc.write_header().expect("encoder header");
-            writer.write_image_data(&[0xFF, 0x00, 0x00]).expect("pixel write"); // red pixel
+            writer
+                .write_image_data(&[0xFF, 0x00, 0x00])
+                .expect("pixel write"); // red pixel
         }
 
         // ── Run the full CDR pipeline ─────────────────────────────────────
         let result = disarm(&fixture);
-        assert!(
-            result.is_ok(),
-            "PNG CDR round-trip failed: {result:?}"
-        );
+        assert!(result.is_ok(), "PNG CDR round-trip failed: {result:?}");
 
         // ── Verify the output is a valid PNG ──────────────────────────────
         let clean = result.unwrap().into_bytes();
@@ -346,7 +345,7 @@ mod tests {
         // Append a minimal zero-length IDAT so `read_info()` can return
         // successfully with the geometry metadata.
         fixture.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // chunk length = 0
-        fixture.extend_from_slice(b"IDAT");                    // chunk type
+        fixture.extend_from_slice(b"IDAT"); // chunk type
         fixture.extend_from_slice(&[0x35, 0xAF, 0x06, 0x1E]); // CRC32(b"IDAT")
 
         let result = sanitize_png(&fixture);

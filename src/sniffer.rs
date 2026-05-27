@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use crate::sanitizers::jpeg::{sanitize_jpeg, SanitizedOutput};
+use crate::sanitizers::jpeg::{SanitizedOutput, sanitize_jpeg};
 use crate::sanitizers::png::sanitize_png;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
@@ -90,7 +90,7 @@ impl<'a> PngChunkHeader<'a> {
     // ── Byte offsets relative to the start of the chunk header ────────────
     // (not relative to file start — those are +8 from these values)
     const LENGTH_OFFSET: usize = 0; // bytes 0–3: big-endian u32 chunk length
-    const TYPE_OFFSET:   usize = 4; // bytes 4–7: 4-byte ASCII chunk type
+    const TYPE_OFFSET: usize = 4; // bytes 4–7: 4-byte ASCII chunk type
 
     /// Borrow a `PngChunkHeader` view from a payload slice.
     ///
