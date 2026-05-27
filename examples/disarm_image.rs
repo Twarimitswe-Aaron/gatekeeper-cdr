@@ -1,12 +1,12 @@
-/// Gatekeeper CDR Engine — CLI example driver
-///
-/// Usage:
-///   cargo run --example disarm_image -- <input_file> [output_file]
-///
-/// Examples:
-///   cargo run --example disarm_image -- photo.jpg
-///   cargo run --example disarm_image -- suspicious.jpg clean.png
-///   cargo run --example disarm_image -- image.png sanitized.png
+//! Gatekeeper CDR Engine — CLI example driver
+//!
+//! Usage:
+//!   cargo run --example disarm_image -- <input_file> [output_file]
+//!
+//! Examples:
+//!   cargo run --example disarm_image -- photo.jpg
+//!   cargo run --example disarm_image -- suspicious.jpg clean.png
+//!   cargo run --example disarm_image -- image.png sanitized.png
 
 use gatekeeper::{disarm, sniff_format};
 use std::{env, fs, path::Path, process};
