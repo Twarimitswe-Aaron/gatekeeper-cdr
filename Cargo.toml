@@ -46,7 +46,7 @@ debug = true        # Generates complete symbol maps for step-through debugging
 
 # 🚀 Production Release Configuration (Optimized for minimal binary size & safety)
 [profile.release]
-opt-level = "z"     # Optimize for minimal binary size
+opt-level = 3       # Maximize hardware execution optimizations
 lto = true          # Enables Link-Time Optimization across ALL dependency crates
 codegen-units = 1   # Drops compilation threads to 1, unlocking deeper macro optimizations
 panic = 'abort'     # Strips out stack-unwinding code, dropping binary size significantly
