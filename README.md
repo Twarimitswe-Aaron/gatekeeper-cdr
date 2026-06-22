@@ -154,7 +154,7 @@ pub enum CdrError {
 | GIF    | ✅ Magic check | ✅ gif crate decode | ✅ PNG output | **Phase 4 — complete** |
 | WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG output | **Phase 4 — complete** |
 | Office | ✅ ZIP Magic check | ✅ ZIP unwrap, drop `.bin` | ✅ ZIP re-encode | **Phase 6 — complete** |
-| PDF    | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 5 |
+| PDF    | ✅ `%PDF-` check | ✅ `lopdf` AST load | ✅ AST strip / re-encode | **Phase 5 — complete** |
 
 ---
 
@@ -584,7 +584,7 @@ public class Main {
 - [x] **Phase 2** — JPEG sanitization pipeline (typestate + zune-jpeg + png)
 - [x] **Phase 3** — PNG sanitization pipeline
 - [x] **Phase 4** — GIF and WebP support
-- [ ] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
+- [x] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
 - [x] **Phase 6** — Office format sanitization (DOCX / XLSX / PPTX)
 - [ ] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
 - [ ] **Phase 8** — `PyO3` Python bindings → publish to PyPI

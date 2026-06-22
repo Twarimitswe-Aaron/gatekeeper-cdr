@@ -211,8 +211,8 @@ mod tests {
 
     #[test]
     fn rejects_unknown_magic() {
-        // A PDF header — definitely not JPEG or PNG.
-        let buf = b"%PDF-1.4 garbage padding bytes";
+        // A generic random string — definitely not JPEG, PNG, GIF, WebP, Office, or PDF.
+        let buf = b"UNKNOWN_MAGIC_BYTES_123";
         let result = sniff_format(buf);
         assert!(
             matches!(result, Err(CdrError::UnknownFormat { .. })),

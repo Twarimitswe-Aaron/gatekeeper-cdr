@@ -138,7 +138,7 @@ pub enum CdrError {
 
     /// The PDF encoder returned an I/O error while writing into the output buffer.
     #[error("PDF encode failure: {source}")]
-    PdfEncodeFailed { source: lopdf::Error },
+    PdfEncodeFailed { source: std::io::Error },
 
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
     /// The format was recognised but its sanitisation pipeline has not yet
