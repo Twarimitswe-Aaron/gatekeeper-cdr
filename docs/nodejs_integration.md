@@ -34,13 +34,17 @@ app.post('/upload', upload.single('document'), async (req, res) => {
         const rawBuffer = req.file.buffer;
 
         // 🛡️ ZERO-TRUST SANITIZATION 🛡️
-        // Pass the raw memory buffer directly into the Rust CDR engine.
-        // This strips all execution vectors without allocating to disk.
-        const sanitizedBuffer = disarm(rawBuffer);
+        // Strictly expect a "pdf". Will reject if the magic bytes mismatch.
+        const result = disarm(rawBuffer, "pdf");
+
+        // Telemetry
+        const mbReceived = (result.original_size_bytes / 1024 / 1024).toFixed(2);
+        const mbOutput = (result.final_size_bytes / 1024 / 1024).toFixed(2);
+        console.log(`Sanitized ${result.detected_format}: ${mbReceived} MB -> ${mbOutput} MB`);
 
         // Save the sanitized safe file
         const safePath = `./uploads/safe_${req.file.originalname}`;
-        await fs.writeFile(safePath, sanitizedBuffer);
+        await fs.writeFile(safePath, result.buffer);
 
         res.status(200).json({ 
             message: "File successfully sanitized and saved.",

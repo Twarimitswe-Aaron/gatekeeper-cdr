@@ -346,7 +346,7 @@ mod tests {
         assert!(result.is_ok(), "PNG CDR round-trip failed: {result:?}");
 
         // ── Verify the output is a valid PNG ──────────────────────────────
-        let clean = result.unwrap().into_bytes();
+        let clean = result.unwrap().buffer;
         // Every valid PNG starts with the 8-byte signature.
         assert_eq!(
             &clean[..8],

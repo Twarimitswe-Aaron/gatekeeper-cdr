@@ -32,13 +32,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['document'])) {
 
     try {
         // 🛡️ ZERO-TRUST SANITIZATION 🛡️
-        // The gatekeeper_disarm function is provided globally by the gatekeeper.so extension.
-        // It drops into native Rust code and returns a clean string of bytes.
-        $safeBytes = gatekeeper_disarm($rawBytes);
+        // The gatekeeper_disarm function expects the bytes and an optional format hint.
+        $result = gatekeeper_disarm($rawBytes, "pdf");
         
+        // Telemetry
+        $mbReceived = number_format($result->original_size_bytes / 1048576, 2);
+        $mbOutput = number_format($result->final_size_bytes / 1048576, 2);
+        error_log("Sanitized {$result->detected_format}: {$mbReceived} MB -> {$mbOutput} MB");
+
         // Save the sanitized file
         $safePath = './uploads/safe_' . basename($originalName);
-        file_put_contents($safePath, $safeBytes);
+        file_put_contents($safePath, $result->buffer);
         
         // Delete the potentially dangerous temporary file
         unlink($tmpPath);

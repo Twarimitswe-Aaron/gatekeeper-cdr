@@ -295,6 +295,7 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 
 /// The rich result object returned by the CDR engine, containing the safe byte
 /// buffer and detailed telemetry regarding the file sizes and formats.
+#[derive(Debug)]
 pub struct DisarmResult {
     /// The mathematically safe, reconstructed byte stream.
     pub buffer: Vec<u8>,

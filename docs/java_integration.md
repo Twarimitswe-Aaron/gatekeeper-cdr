@@ -48,13 +48,18 @@ public class DocumentController {
             byte[] rawBytes = file.getBytes();
 
             // 🛡️ ZERO-TRUST SANITIZATION 🛡️
-            // GatekeeperCDR.disarm acts as a static JNI bridge to the Rust engine
-            byte[] safeBytes = GatekeeperCDR.disarm(rawBytes);
+            // GatekeeperCDR.disarm acts as a static JNI bridge. Passing a hint string enforces strictly.
+            DisarmResult result = GatekeeperCDR.disarm(rawBytes, "pdf");
+
+            // Telemetry
+            double mbReceived = result.originalSizeBytes / 1048576.0;
+            double mbOutput = result.finalSizeBytes / 1048576.0;
+            System.out.printf("Sanitized %s: %.2f MB -> %.2f MB\n", result.detectedFormat, mbReceived, mbOutput);
 
             // Save the sanitized safe file
             File safeFile = new File("./uploads/safe_" + file.getOriginalFilename());
             try (FileOutputStream fos = new FileOutputStream(safeFile)) {
-                fos.write(safeBytes);
+                fos.write(result.buffer);
             }
 
             return ResponseEntity.ok("File successfully sanitized and saved at: " + safeFile.getPath());

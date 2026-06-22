@@ -152,7 +152,7 @@ impl<'a> ImageStream<'a> {
     ///     .expect("CDR failed");
     /// std::fs::write("clean.png", clean.into_bytes()).unwrap();
     /// ```
-    pub fn route(self) -> Result<SanitizedOutput, CdrError> {
+    pub fn route(self) -> Result<crate::sniffer::DisarmResult, CdrError> {
         // ── Guard 1: let…else — flat early return on absent payload ──────────
         //
         // `let...else` is Rust's idiomatic guard-clause syntax (stabilised

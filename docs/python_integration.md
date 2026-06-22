@@ -27,13 +27,17 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         # 🛡️ ZERO-TRUST SANITIZATION 🛡️
-        # Call into the compiled Rust engine to instantly strip execution vectors.
-        # This operates on pure bytes, preventing malicious disk writes.
-        safe_bytes = gatekeeper_cdr.disarm(raw_bytes)
+        # Strictly expect a "pdf". Will reject if the file is an image/executable.
+        result = gatekeeper_cdr.disarm(raw_bytes, expected_format="pdf")
+        
+        # Telemetry
+        mb_received = result.original_size_bytes / (1024 * 1024)
+        mb_output = result.final_size_bytes / (1024 * 1024)
+        print(f"Sanitized {result.detected_format}: {mb_received:.2f} MB -> {mb_output:.2f} MB")
         
     except ValueError as e:
-        # The Rust engine throws a ValueError if the file is utterly unrecognizable,
-        # structurally corrupted, or impossible to decode safely.
+        # The Rust engine throws a ValueError if the file is completely unrecognized,
+        # structurally corrupted, or if there is a FormatMismatch.
         raise HTTPException(
             status_code=406, 
             detail=f"Rejected: Invalid or malicious file structure. {str(e)}"
@@ -42,7 +46,7 @@ async def upload_document(file: UploadFile = File(...)):
     # Save the sanitized file
     safe_path = f"./uploads/safe_{file.filename}"
     with open(safe_path, "wb") as out_file:
-        out_file.write(safe_bytes)
+        out_file.write(result.buffer)
         
     return {
         "message": "File successfully sanitized and saved.",

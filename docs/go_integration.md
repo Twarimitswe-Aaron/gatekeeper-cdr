@@ -49,16 +49,21 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 🛡️ ZERO-TRUST SANITIZATION 🛡️
 	// The CGo binding passes the byte array pointer to the Rust engine
-	safeBytes, err := gatekeeper.Disarm(rawBytes)
+	result, err := gatekeeper.Disarm(rawBytes, "pdf") // Strict format hint
 	if err != nil {
-		// e.g. "UnknownFormat", "JpegMissingEoi"
+		// e.g. "FormatMismatch", "UnknownFormat", "JpegMissingEoi"
 		http.Error(w, fmt.Sprintf("Rejected: %v", err), http.StatusNotAcceptable)
 		return
 	}
 
+	// Telemetry
+	mbReceived := float64(result.OriginalSizeBytes) / 1024 / 1024
+	mbOutput := float64(result.FinalSizeBytes) / 1024 / 1024
+	fmt.Printf("Sanitized %s: %.2f MB -> %.2f MB\n", result.DetectedFormat, mbReceived, mbOutput)
+
 	// Save securely
 	safePath := "./uploads/safe_" + header.Filename
-	err = os.WriteFile(safePath, safeBytes, 0644)
+	err = os.WriteFile(safePath, result.Buffer, 0644)
 	if err != nil {
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
 		return
