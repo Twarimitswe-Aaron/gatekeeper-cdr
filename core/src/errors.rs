@@ -43,6 +43,10 @@ pub enum CdrError {
     #[error("unrecognised file magic: {magic:02X?}")]
     UnknownFormat { magic: [u8; 4] },
 
+    /// The detected file format does not match the explicitly requested expected format.
+    #[error("format mismatch: strictly expected '{expected}', but detected '{got}'")]
+    FormatMismatch { expected: String, got: String },
+
     // ── Stage 1 – Format validation ────────────────────────────────────────
     /// A JPEG SOI marker (0xFF 0xD8) was found but the EOI trailer (0xFF 0xD9)
     /// is absent.  The file is structurally incomplete.

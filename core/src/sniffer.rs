@@ -166,6 +166,20 @@ pub enum FileFormat {
     Pdf,
 }
 
+impl FileFormat {
+    /// Returns the string representation of the format.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpeg",
+            Self::Png => "png",
+            Self::Gif => "gif",
+            Self::Webp => "webp",
+            Self::Office => "office",
+            Self::Pdf => "pdf",
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Zero-trust format sniffer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,37 +293,54 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 //  Top-level dispatch: disarm()
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The rich result object returned by the CDR engine, containing the safe byte
+/// buffer and detailed telemetry regarding the file sizes and formats.
+pub struct DisarmResult {
+    /// The mathematically safe, reconstructed byte stream.
+    pub buffer: Vec<u8>,
+    /// The exact byte size of the original un-trusted input file.
+    pub original_size_bytes: usize,
+    /// The exact byte size of the safe output file.
+    pub final_size_bytes: usize,
+    /// The string representation of the detected file format (e.g. "pdf", "png").
+    pub detected_format: &'static str,
+}
+
 /// Detect, validate, and sanitise `payload` in a single call.
 ///
-/// Returns a [`SanitizedOutput`] token — a newtype wrapper that the compiler
-/// treats as a distinct type from `Vec<u8>` or any raw intermediate.
-///
-/// ## Signature lockdown
-/// Any function that should only ever receive sanitised data must declare its
-/// parameter as `SanitizedOutput`:
-///
-/// ```rust,no_run
-/// use gatekeeper::disarm;
-///
-/// fn save_to_storage(bytes: Vec<u8>) {
-///     std::fs::write("clean.png", bytes).unwrap();
-/// }
-///
-/// let raw = std::fs::read("untrusted.jpg").unwrap();
-/// let clean = disarm(&raw).expect("CDR failed");
-/// save_to_storage(clean.into_bytes()); // only SanitizedOutput has into_bytes()
-/// // save_to_storage(raw);   ← compile error: Vec<u8> has no into_bytes()
-/// ```
+/// Returns a [`DisarmResult`] containing the sanitized output buffer and sizes.
+/// If `expected_format` is provided (e.g., "pdf"), it strictly ensures the file
+/// matches this format before proceeding, returning `FormatMismatch` if it doesn't.
 ///
 /// # Errors
-/// Any [`CdrError`] from format detection or the sanitizer pipeline.
-pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
-    match sniff_format(payload)? {
+/// Any [`CdrError`] from format detection, format mismatch, or the sanitizer pipeline.
+pub fn disarm(payload: &[u8], expected_format: Option<&str>) -> Result<DisarmResult, CdrError> {
+    let format = sniff_format(payload)?;
+
+    if let Some(expected) = expected_format {
+        let got = format.as_str();
+        if expected != got {
+            return Err(CdrError::FormatMismatch {
+                expected: expected.to_string(),
+                got: got.to_string(),
+            });
+        }
+    }
+
+    let sanitized = match format {
         FileFormat::Jpeg => sanitize_jpeg(payload),
         FileFormat::Png => sanitize_png(payload),
         FileFormat::Gif => sanitize_gif(payload),
         FileFormat::Webp => sanitize_webp(payload),
         FileFormat::Office => sanitize_office(payload),
         FileFormat::Pdf => sanitize_pdf(payload),
-    }
+    }?;
+
+    let buffer = sanitized.into_bytes();
+    Ok(DisarmResult {
+        original_size_bytes: payload.len(),
+        final_size_bytes: buffer.len(),
+        detected_format: format.as_str(),
+        buffer,
+    })
 }

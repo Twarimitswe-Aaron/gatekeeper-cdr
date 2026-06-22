@@ -44,8 +44,8 @@
 //! use gatekeeper::disarm;
 //!
 //! let raw = std::fs::read("untrusted.jpg").unwrap();
-//! let clean = disarm(&raw).expect("CDR failed");
-//! std::fs::write("clean.png", clean.into_bytes()).unwrap();
+//! let clean = disarm(&raw, None).expect("CDR failed");
+//! std::fs::write("clean.png", clean.buffer).unwrap();
 //! ```
 
 pub mod errors;
@@ -220,6 +220,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_format_mismatch() {
+        let png = minimal_png_stub();
+        let result = sniffer::disarm(&png, Some("pdf"));
+        assert!(
+            matches!(result, Err(CdrError::FormatMismatch { .. })),
+            "expected FormatMismatch, got {result:?}"
+        );
+    }
+
     // ── Stack-only sniff: no heap ─────────────────────────────────────────
     //
     // The following test validates the architectural contract that sniff_format
@@ -332,7 +342,7 @@ mod tests {
         }
 
         // ── Run the full CDR pipeline ─────────────────────────────────────
-        let result = disarm(&fixture);
+        let result = disarm(&fixture, None);
         assert!(result.is_ok(), "PNG CDR round-trip failed: {result:?}");
 
         // ── Verify the output is a valid PNG ──────────────────────────────

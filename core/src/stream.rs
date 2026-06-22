@@ -183,13 +183,13 @@ impl<'a> ImageStream<'a> {
             // SOI = 0xFF 0xD8 (ISO/IEC 10918-1 §B.1.1).
             // Full structural validation (EOI, geometry) is owned by
             // `sanitize_jpeg` → `RawPayload::new()` → `JpegPipeline::decode()`.
-            [0xFF, 0xD8, ..] => crate::sniffer::disarm(bytes),
+            [0xFF, 0xD8, ..] => crate::sniffer::disarm(bytes, None),
 
             // ── PNG ───────────────────────────────────────────────────────────
             //
             // Matches first 4 bytes: 0x89 P N G.
             // Phase 3 stub: fail-closed rather than forwarding unsanitised bytes.
-            [0x89, 0x50, 0x4E, 0x47, ..] => crate::sniffer::disarm(bytes),
+            [0x89, 0x50, 0x4E, 0x47, ..] => crate::sniffer::disarm(bytes, None),
 
             // ── Unknown ───────────────────────────────────────────────────────
             //
