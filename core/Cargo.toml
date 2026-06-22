@@ -1,0 +1,58 @@
+[package]
+name        = "gatekeeper"
+version     = "0.1.0"
+edition     = "2024"
+description = "A zero-trust Content Disarm and Reconstruction (CDR) engine for multi-format file sanitization."
+license     = "AGPL-3.0-only"
+repository  = "https://github.com/Twarimitswe-Aaron/gatekeeper-cdr"
+keywords    = ["cdr", "security", "sanitization", "image", "zero-copy"]
+categories  = ["parser-implementations", "encoding", "multimedia::images"]
+
+# ── Crate output targets ──────────────────────────────────────────────────────
+# cdylib  → native shared library for FFI consumers (napi-rs, ext-php-rs, PyO3)
+# rlib    → Rust linkable library for downstream Rust crates
+[lib]
+name      = "gatekeeper"
+crate-type = ["cdylib", "rlib"]
+
+# ── Core runtime dependencies ─────────────────────────────────────────────────
+[dependencies]
+# Domain-specific, strongly-typed error definitions.  Zero string allocations
+# at the error-variant level; every branch encodes structured data.
+thiserror = "1"
+
+# Zero-copy JPEG decoder built for no-std environments.  We route raw &[u8]
+# slices through ZCursor to satisfy its ZByteReaderTrait without an extra heap
+# copy.  Version 0.5 ships the stable I/O-trait abstraction.
+zune-jpeg = "0.5"
+
+# Reference PNG decoder/encoder.  We use it exclusively for the re-encoding
+# leg of the sanitization pipeline—never for metadata-inclusive decoding.
+png = "0.17"
+
+# zune-core provides ColorSpace and DecoderOptions shared between all zune-*
+# family crates.  Pin the same major series that zune-jpeg 0.5 depends on.
+zune-core = "0.5"
+gif = "0.13.1"
+image-webp = "0.2.0"
+zip = "8.6.0"
+lopdf = "0.41.0"
+
+# ── Development & testing dependencies ───────────────────────────────────────
+[dev-dependencies]
+jpeg-encoder = "0.3"
+# Used in integration tests to generate deterministic synthetic JPEG fixtures
+# without external file I/O.
+
+# Development Configuration (Optimized for active local engineering)
+[profile.dev]
+opt-level = 1       # Light optimizations so loop components run reasonably fast
+debug = true        # Generates complete symbol maps for step-through debugging
+
+# Production Release Configuration (Optimized for minimal binary size & safety)
+[profile.release]
+opt-level = 3       # Maximize hardware execution optimizations
+lto = true          # Enables Link-Time Optimization across ALL dependency crates
+codegen-units = 1   # Drops compilation threads to 1, unlocking deeper macro optimizations
+panic = 'abort'     # Strips out stack-unwinding code, dropping binary size significantly
+strip = true        # Strip symbols and debug info from binary
