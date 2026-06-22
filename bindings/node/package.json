@@ -12,6 +12,7 @@
     "test": "node test.js"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.3"
+    "@napi-rs/cli": "^2.18.3",
+    "@types/node": "^26.0.0"
   }
 }

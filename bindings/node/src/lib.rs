@@ -1,5 +1,6 @@
 #![deny(clippy::all)]
 
+use napi_derive::napi;
 use napi::bindgen_prelude::*;
 use napi::Error as NapiError;
 use napi::Status;
