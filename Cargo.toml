@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "core",
-    # "bindings/node",    # To be implemented
+    "bindings/node",
     # "bindings/python",  # To be implemented
     # "bindings/go",      # To be implemented
     # "bindings/php",     # To be implemented

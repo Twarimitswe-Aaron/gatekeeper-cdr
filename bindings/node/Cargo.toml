@@ -1,0 +1,18 @@
+[package]
+name = "gatekeeper-node"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Depend on the core logic locally
+gatekeeper = { path = "../../core" }
+
+# NAPI framework dependencies
+napi = { version = "2.16.1", default-features = false, features = ["napi4"] }
+napi-derive = "2.16.1"
+
+[build-dependencies]
+napi-build = "2.0.1"

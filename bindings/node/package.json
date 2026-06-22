@@ -1,0 +1,17 @@
+{
+  "name": "gatekeeper-cdr",
+  "version": "1.0.0",
+  "description": "Zero-trust Content Disarm and Reconstruction native Node.js addon",
+  "main": "index.js",
+  "napi": {
+    "name": "gatekeeper"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node test.js"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.3"
+  }
+}
