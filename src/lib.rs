@@ -36,6 +36,7 @@
 //! | GIF    | complete (decode first frame → PNG re-encode) |
 //! | WebP   | complete (decode → PNG re-encode) |
 //! | Office | complete (ZIP unwrap, `.bin` strip → ZIP re-encode) |
+//! | PDF    | complete (Structural strip of Actions/JS → PDF re-encode) |
 //!
 //! ## Quick start
 //!
@@ -93,6 +94,12 @@ pub use sanitizers::office::sanitize_office;
 
 /// Typestate pipeline entry point for Office inputs.
 pub use sanitizers::office::RawOfficePayload;
+
+/// Convenience free-function CDR entry point for PDF inputs.
+pub use sanitizers::pdf::sanitize_pdf;
+
+/// Typestate pipeline entry point for PDF inputs.
+pub use sanitizers::pdf::RawPdfPayload;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unit tests

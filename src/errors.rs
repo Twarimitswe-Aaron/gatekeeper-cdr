@@ -131,6 +131,15 @@ pub enum CdrError {
     #[error("Office file is structurally malformed: missing [Content_Types].xml")]
     OfficeMissingContentTypes,
 
+    // ── Stage 6 – PDF Formats ─────────────────────────────────────────────
+    /// The PDF decoder surfaced a structural error in the input stream.
+    #[error("PDF decode failure: {source}")]
+    PdfDecodeFailed { source: lopdf::Error },
+
+    /// The PDF encoder returned an I/O error while writing into the output buffer.
+    #[error("PDF encode failure: {source}")]
+    PdfEncodeFailed { source: lopdf::Error },
+
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
     /// The format was recognised but its sanitisation pipeline has not yet
     /// been implemented.

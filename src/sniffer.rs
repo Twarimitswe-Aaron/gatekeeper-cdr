@@ -28,6 +28,7 @@ use crate::sanitizers::png::sanitize_png;
 use crate::sanitizers::gif::sanitize_gif;
 use crate::sanitizers::webp::sanitize_webp;
 use crate::sanitizers::office::sanitize_office;
+use crate::sanitizers::pdf::sanitize_pdf;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -60,6 +61,9 @@ pub(crate) const WEBP_WEBP: [u8; 4] = *b"WEBP";
 
 /// ZIP file signature. Office formats (OOXML) are ZIP archives.
 pub(crate) const ZIP_MAGIC: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
+
+/// PDF signature.
+pub(crate) const PDF_MAGIC: [u8; 5] = *b"%PDF-";
 
 /// Minimum byte count required to inspect enough magic and structure to make a
 /// reliable format determination without false positives.
@@ -158,6 +162,8 @@ pub enum FileFormat {
     Webp,
     /// Microsoft Office OOXML format (DOCX, XLSX, PPTX) via ZIP.
     Office,
+    /// Portable Document Format.
+    Pdf,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,6 +198,7 @@ pub enum FileFormat {
 ///     Ok(FileFormat::Gif)  => println!("GIF confirmed"),
 ///     Ok(FileFormat::Webp) => println!("WebP confirmed"),
 ///     Ok(FileFormat::Office) => println!("Office format confirmed"),
+///     Ok(FileFormat::Pdf)    => println!("PDF format confirmed"),
 ///     Err(e)               => eprintln!("rejected: {e}"),
 /// }
 /// ```
@@ -254,6 +261,11 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
         return Ok(FileFormat::Office);
     }
 
+    // ── PDF detection ─────────────────────────────────────────────────────
+    if payload.len() >= 5 && payload[..5] == PDF_MAGIC {
+        return Ok(FileFormat::Pdf);
+    }
+
     // ── Unknown — capture first 4 bytes for error context ─────────────────
     //
     // A single fixed-size copy only for the error path; hot path never
@@ -298,5 +310,6 @@ pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
         FileFormat::Gif => sanitize_gif(payload),
         FileFormat::Webp => sanitize_webp(payload),
         FileFormat::Office => sanitize_office(payload),
+        FileFormat::Pdf => sanitize_pdf(payload),
     }
 }
