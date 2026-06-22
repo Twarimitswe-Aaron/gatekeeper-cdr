@@ -35,6 +35,7 @@ png = "0.17"
 zune-core = "0.5"
 gif = "0.13.1"
 image-webp = "0.2.0"
+zip = "8.6.0"
 
 # ── Development & testing dependencies ───────────────────────────────────────
 [dev-dependencies]

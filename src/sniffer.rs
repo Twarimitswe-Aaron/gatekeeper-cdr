@@ -27,6 +27,7 @@ use crate::sanitizers::jpeg::{SanitizedOutput, sanitize_jpeg};
 use crate::sanitizers::png::sanitize_png;
 use crate::sanitizers::gif::sanitize_gif;
 use crate::sanitizers::webp::sanitize_webp;
+use crate::sanitizers::office::sanitize_office;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -56,6 +57,9 @@ pub(crate) const GIF89A_SIG: [u8; 6] = *b"GIF89a";
 /// WebP RIFF header components.
 pub(crate) const WEBP_RIFF: [u8; 4] = *b"RIFF";
 pub(crate) const WEBP_WEBP: [u8; 4] = *b"WEBP";
+
+/// ZIP file signature. Office formats (OOXML) are ZIP archives.
+pub(crate) const ZIP_MAGIC: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
 
 /// Minimum byte count required to inspect enough magic and structure to make a
 /// reliable format determination without false positives.
@@ -152,6 +156,8 @@ pub enum FileFormat {
     Gif,
     /// WebP image.
     Webp,
+    /// Microsoft Office OOXML format (DOCX, XLSX, PPTX) via ZIP.
+    Office,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +191,7 @@ pub enum FileFormat {
 ///     Ok(FileFormat::Png)  => println!("PNG confirmed"),
 ///     Ok(FileFormat::Gif)  => println!("GIF confirmed"),
 ///     Ok(FileFormat::Webp) => println!("WebP confirmed"),
+///     Ok(FileFormat::Office) => println!("Office format confirmed"),
 ///     Err(e)               => eprintln!("rejected: {e}"),
 /// }
 /// ```
@@ -242,6 +249,11 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
         }
     }
 
+    // ── Office (ZIP) detection ────────────────────────────────────────────
+    if payload[..4] == ZIP_MAGIC {
+        return Ok(FileFormat::Office);
+    }
+
     // ── Unknown — capture first 4 bytes for error context ─────────────────
     //
     // A single fixed-size copy only for the error path; hot path never
@@ -285,5 +297,6 @@ pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
         FileFormat::Png => sanitize_png(payload),
         FileFormat::Gif => sanitize_gif(payload),
         FileFormat::Webp => sanitize_webp(payload),
+        FileFormat::Office => sanitize_office(payload),
     }
 }

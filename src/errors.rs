@@ -118,6 +118,19 @@ pub enum CdrError {
     #[error("PNG re-encode failure: {source}")]
     PngEncodeFailed { source: png::EncodingError },
 
+    // ── Stage 5 – Office Formats ──────────────────────────────────────────
+    /// The ZIP decoder surfaced a structural error in the input stream.
+    #[error("ZIP decode failure: {source}")]
+    ZipDecodeFailed { source: zip::result::ZipError },
+
+    /// The ZIP encoder returned an I/O error while writing into the output buffer.
+    #[error("ZIP encode failure: {source}")]
+    ZipEncodeFailed { source: zip::result::ZipError },
+
+    /// The ZIP archive is missing the [Content_Types].xml file.
+    #[error("Office file is structurally malformed: missing [Content_Types].xml")]
+    OfficeMissingContentTypes,
+
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
     /// The format was recognised but its sanitisation pipeline has not yet
     /// been implemented.

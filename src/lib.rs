@@ -35,6 +35,7 @@
 //! | PNG    | complete (decode → PNG re-encode) |
 //! | GIF    | complete (decode first frame → PNG re-encode) |
 //! | WebP   | complete (decode → PNG re-encode) |
+//! | Office | complete (ZIP unwrap, `.bin` strip → ZIP re-encode) |
 //!
 //! ## Quick start
 //!
@@ -86,6 +87,12 @@ pub use sanitizers::webp::sanitize_webp;
 
 /// Typestate pipeline entry point for WebP inputs.
 pub use sanitizers::webp::RawWebpPayload;
+
+/// Convenience free-function CDR entry point for Office inputs.
+pub use sanitizers::office::sanitize_office;
+
+/// Typestate pipeline entry point for Office inputs.
+pub use sanitizers::office::RawOfficePayload;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unit tests
