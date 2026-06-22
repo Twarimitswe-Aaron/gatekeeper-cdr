@@ -69,6 +69,14 @@ pub enum CdrError {
     #[error("PNG decode failure: {source}")]
     PngDecodeFailed { source: png::DecodingError },
 
+    /// The GIF decoder surfaced a structural error in the input stream.
+    #[error("GIF decode failure: {source}")]
+    GifDecodeFailed { source: gif::DecodingError },
+
+    /// The WebP decoder surfaced a structural error in the input stream.
+    #[error("WebP decode failure: {source}")]
+    WebpDecodeFailed { source: image_webp::DecodingError },
+
     // ── Stage 3 – Pixel-geometry validation ───────────────────────────────
     /// After decode the decoder reported no image info (width / height /
     /// colorspace).  This should be unreachable on valid input but is captured

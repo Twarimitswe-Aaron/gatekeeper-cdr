@@ -33,9 +33,12 @@ png = "0.17"
 # zune-core provides ColorSpace and DecoderOptions shared between all zune-*
 # family crates.  Pin the same major series that zune-jpeg 0.5 depends on.
 zune-core = "0.5"
+gif = "0.13.1"
+image-webp = "0.2.0"
 
 # ── Development & testing dependencies ───────────────────────────────────────
 [dev-dependencies]
+jpeg-encoder = "0.3"
 # Used in integration tests to generate deterministic synthetic JPEG fixtures
 # without external file I/O.
 

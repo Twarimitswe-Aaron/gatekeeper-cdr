@@ -33,6 +33,8 @@
 //! |--------|--------|
 //! | JPEG   | complete (decode → PNG re-encode) |
 //! | PNG    | complete (decode → PNG re-encode) |
+//! | GIF    | complete (decode first frame → PNG re-encode) |
+//! | WebP   | complete (decode → PNG re-encode) |
 //!
 //! ## Quick start
 //!
@@ -72,6 +74,18 @@ pub use sanitizers::png::sanitize_png;
 
 /// Typestate pipeline entry point for PNG inputs.
 pub use sanitizers::png::RawPngPayload;
+
+/// Convenience free-function CDR entry point for GIF inputs.
+pub use sanitizers::gif::sanitize_gif;
+
+/// Typestate pipeline entry point for GIF inputs.
+pub use sanitizers::gif::RawGifPayload;
+
+/// Convenience free-function CDR entry point for WebP inputs.
+pub use sanitizers::webp::sanitize_webp;
+
+/// Typestate pipeline entry point for WebP inputs.
+pub use sanitizers::webp::RawWebpPayload;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unit tests

@@ -25,6 +25,8 @@
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::{SanitizedOutput, sanitize_jpeg};
 use crate::sanitizers::png::sanitize_png;
+use crate::sanitizers::gif::sanitize_gif;
+use crate::sanitizers::webp::sanitize_webp;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -46,6 +48,14 @@ pub(crate) const PNG_SIG: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0
 /// bytes 8–11 = IHDR chunk length (big-endian u32, value = 13)
 /// bytes 12–15 = IHDR chunk type (ASCII "IHDR")
 pub(crate) const PNG_IHDR: [u8; 4] = [0x49, 0x48, 0x44, 0x52]; // "IHDR"
+
+/// GIF signatures.
+pub(crate) const GIF87A_SIG: [u8; 6] = *b"GIF87a";
+pub(crate) const GIF89A_SIG: [u8; 6] = *b"GIF89a";
+
+/// WebP RIFF header components.
+pub(crate) const WEBP_RIFF: [u8; 4] = *b"RIFF";
+pub(crate) const WEBP_WEBP: [u8; 4] = *b"WEBP";
 
 /// Minimum byte count required to inspect enough magic and structure to make a
 /// reliable format determination without false positives.
@@ -138,6 +148,10 @@ pub enum FileFormat {
     Jpeg,
     /// Portable Network Graphics image.
     Png,
+    /// Graphics Interchange Format image.
+    Gif,
+    /// WebP image.
+    Webp,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,6 +183,8 @@ pub enum FileFormat {
 /// match sniff_format(&raw) {
 ///     Ok(FileFormat::Jpeg) => println!("JPEG confirmed"),
 ///     Ok(FileFormat::Png)  => println!("PNG confirmed"),
+///     Ok(FileFormat::Gif)  => println!("GIF confirmed"),
+///     Ok(FileFormat::Webp) => println!("WebP confirmed"),
 ///     Err(e)               => eprintln!("rejected: {e}"),
 /// }
 /// ```
@@ -214,6 +230,18 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
         return Ok(FileFormat::Png);
     }
 
+    // ── GIF detection ─────────────────────────────────────────────────────
+    if payload[..6] == GIF87A_SIG || payload[..6] == GIF89A_SIG {
+        return Ok(FileFormat::Gif);
+    }
+
+    // ── WebP detection ────────────────────────────────────────────────────
+    if payload[..4] == WEBP_RIFF {
+        if payload.len() >= 12 && payload[8..12] == WEBP_WEBP {
+            return Ok(FileFormat::Webp);
+        }
+    }
+
     // ── Unknown — capture first 4 bytes for error context ─────────────────
     //
     // A single fixed-size copy only for the error path; hot path never
@@ -255,5 +283,7 @@ pub fn disarm(payload: &[u8]) -> Result<SanitizedOutput, CdrError> {
     match sniff_format(payload)? {
         FileFormat::Jpeg => sanitize_jpeg(payload),
         FileFormat::Png => sanitize_png(payload),
+        FileFormat::Gif => sanitize_gif(payload),
+        FileFormat::Webp => sanitize_webp(payload),
     }
 }

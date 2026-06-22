@@ -151,8 +151,8 @@ pub enum CdrError {
 |--------|-----------|----------|-----------|--------|
 | JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ PNG output | **Phase 2 — complete** |
 | PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG output | **Phase 3 — complete** |
-| GIF    | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 4 |
-| WebP   | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 4 |
+| GIF    | ✅ Magic check | ✅ gif crate decode | ✅ PNG output | **Phase 4 — complete** |
+| WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG output | **Phase 4 — complete** |
 | PDF    | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 5 |
 | DOCX   | 🔧 Planned | 🔧 Planned | 🔧 Planned | Phase 6 |
 
@@ -583,7 +583,7 @@ public class Main {
 - [x] **Phase 1** — Cargo manifest, error model, format sniffer
 - [x] **Phase 2** — JPEG sanitization pipeline (typestate + zune-jpeg + png)
 - [x] **Phase 3** — PNG sanitization pipeline
-- [ ] **Phase 4** — GIF and WebP support
+- [x] **Phase 4** — GIF and WebP support
 - [ ] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
 - [ ] **Phase 6** — DOCX / XLSX / PPTX Office format sanitization
 - [ ] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
