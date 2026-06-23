@@ -2,7 +2,7 @@
 members = [
     "core",
     "bindings/node",
-    # "bindings/python",  # To be implemented
+    "bindings/python",  # Phase 8 implementation
     # "bindings/go",      # To be implemented
     # "bindings/php",     # To be implemented
     # "bindings/java",    # To be implemented

@@ -342,8 +342,8 @@ These bindings do not exist yet — they are the design target for Phases 7–11
 
 | Language | Bridge / tool | Install package | Status |
 |----------|--------------|-----------------|--------|
-| Node.js  | `napi-rs`    | `npm install gatekeeper-cdr` | Phase 7 — planned |
-| Python   | `PyO3`       | `pip install gatekeeper-cdr` | Phase 8 — planned |
+| Node.js  | `napi-rs`    | `npm install gatekeeper-cdr` | Phase 7 — complete |
+| Python   | `PyO3`       | `pip install gatekeeper-cdr` | Phase 8 — complete |
 | PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — planned |
 | C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — planned |
 | Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr` | Phase 10 — planned |
@@ -353,7 +353,7 @@ These bindings do not exist yet — they are the design target for Phases 7–11
 
 ### Node.js (via napi-rs)
 
-<!-- PLANNED — not yet implemented. Bindings will be published to npm as `gatekeeper-cdr`. -->
+
 
 ```js
 // Install:
@@ -377,13 +377,13 @@ fs.writeFileSync('clean.png', clean);
 // import { disarm, sniffFormat } from 'gatekeeper-cdr';
 ```
 
-<!-- END PLANNED -->
+
 
 ---
 
 ### Python (via PyO3)
 
-<!-- PLANNED — not yet implemented. Bindings will be published to PyPI as `gatekeeper-cdr`. -->
+
 
 ```python
 # Install:
@@ -408,7 +408,7 @@ with open("clean.png", "wb") as f:
 # clean = await gatekeeper_cdr.disarm_async(raw)
 ```
 
-<!-- END PLANNED -->
+
 
 ---
 
@@ -586,8 +586,8 @@ public class Main {
 - [x] **Phase 4** — GIF and WebP support
 - [x] **Phase 5** — PDF sanitization (remove embedded JavaScript, OLE streams)
 - [x] **Phase 6** — Office format sanitization (DOCX / XLSX / PPTX)
-- [ ] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
-- [ ] **Phase 8** — `PyO3` Python bindings → publish to PyPI
+- [x] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
+- [x] **Phase 8** — `PyO3` Python bindings → publish to PyPI
 - [ ] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
 - [ ] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
 - [ ] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
