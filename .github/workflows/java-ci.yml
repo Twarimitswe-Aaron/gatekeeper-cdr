@@ -33,8 +33,6 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
           server-id: github
-          server-username: GITHUB_ACTOR
-          server-password: GITHUB_TOKEN
           
       - name: Test Native Module
         working-directory: bindings/java
@@ -45,5 +43,4 @@ jobs:
         working-directory: bindings/java
         run: mvn deploy
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
