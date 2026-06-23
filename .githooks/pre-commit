@@ -1,0 +1,21 @@
+#!/bin/sh
+# pre-commit hook
+# Runs all tests before allowing a commit
+
+echo "Running tests before committing..."
+
+# Run cargo tests strictly on the core engine
+# (We avoid --workspace to prevent failing on local machines missing PHP/JNI C headers)
+cargo test -p gatekeeper
+
+# Capture the exit status
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "❌ Tests failed. Commit aborted."
+    echo "Please fix the failing tests before committing."
+    exit 1
+fi
+
+echo "✅ All tests passed. Proceeding with commit."
+exit 0
