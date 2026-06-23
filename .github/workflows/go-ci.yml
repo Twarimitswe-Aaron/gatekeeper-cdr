@@ -1,0 +1,88 @@
+name: Go CI (Cross-Compile)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'bindings/go/**'
+      - '.github/workflows/go-ci.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-staticlibs:
+    if: github.actor != 'github-actions[bot]'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            filename: libgatekeeper.a
+          - os: macos-latest
+            target: darwin
+            filename: libgatekeeper.a
+          - os: windows-latest
+            target: windows
+            filename: gatekeeper.lib
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Gatekeeper staticlib
+        run: cargo build --release -p gatekeeper
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-${{ matrix.target }}
+          path: target/release/${{ matrix.filename }}
+          retention-days: 1
+
+  bundle-and-commit:
+    needs: build-staticlibs
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Ensure directories exist
+      - name: Prepare directories
+        run: |
+          mkdir -p bindings/go/lib/linux
+          mkdir -p bindings/go/lib/darwin
+          mkdir -p bindings/go/lib/windows
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gatekeeper-linux
+          path: bindings/go/lib/linux/
+
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gatekeeper-darwin
+          path: bindings/go/lib/darwin/
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gatekeeper-windows
+          path: bindings/go/lib/windows/
+
+      - name: Commit multi-platform binaries
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(go): auto-bundle multi-platform CGo binaries"
+          file_pattern: 'bindings/go/lib/**'
