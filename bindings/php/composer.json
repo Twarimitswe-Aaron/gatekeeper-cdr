@@ -1,0 +1,21 @@
+{
+    "name": "twarimitswe-aaron/gatekeeper-cdr",
+    "description": "A zero-trust Content Disarm and Reconstruction (CDR) engine for multi-format file sanitisation.",
+    "type": "library",
+    "license": "AGPL-3.0-only",
+    "keywords": ["cdr", "security", "sanitization", "image", "zero-copy", "gatekeeper", "ffi"],
+    "authors": [
+        {
+            "name": "Twarimitswe Aaron",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": ">=8.1"
+    },
+    "extra": {
+        "gatekeeper": {
+            "description": "This package relies on the native Gatekeeper CDR Rust extension. See https://github.com/Twarimitswe-Aaron/gatekeeper-cdr for installation instructions."
+        }
+    }
+}
