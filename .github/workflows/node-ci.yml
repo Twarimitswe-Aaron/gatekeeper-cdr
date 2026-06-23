@@ -42,11 +42,16 @@ jobs:
         run: npm install
 
       - name: Install NAPI CLI Globally
-        run: npm install -g @napi-rs/cli
+        run: npm install -g @napi-rs/cli@2.18.3
 
       - name: Build Native Module
         working-directory: bindings/node
         run: napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Test Native Module
+        working-directory: bindings/node
+        continue-on-error: true # Prevents CI from failing if testing an ARM binary on an Intel runner
+        run: node -e "const { disarm } = require('.'); console.log('disarm loaded:', typeof disarm)"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
