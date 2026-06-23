@@ -1,12 +1,12 @@
 package gatekeeper
 
-//go:generate cargo build --release --manifest-path ../../Cargo.toml -p gatekeeper
+//go:generate ./build_go.sh
 
 /*
-#cgo CFLAGS: -I../../core
-#cgo linux LDFLAGS: ${SRCDIR}/../../target/release/libgatekeeper.a -lm -ldl -lpthread
-#cgo darwin LDFLAGS: ${SRCDIR}/../../target/release/libgatekeeper.a -lm -framework Security -framework CoreFoundation
-#cgo windows LDFLAGS: ${SRCDIR}/../../target/release/gatekeeper.lib -lws2_32 -luserenv -lbcrypt
+#cgo CFLAGS: -I${SRCDIR}
+#cgo linux LDFLAGS: ${SRCDIR}/lib/linux/libgatekeeper.a -lm -ldl -lpthread
+#cgo darwin LDFLAGS: ${SRCDIR}/lib/darwin/libgatekeeper.a -lm -framework Security -framework CoreFoundation
+#cgo windows LDFLAGS: ${SRCDIR}/lib/windows/gatekeeper.lib -lws2_32 -luserenv -lbcrypt
 #include "gatekeeper.h"
 #include <stdlib.h>
 */

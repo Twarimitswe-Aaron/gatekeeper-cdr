@@ -2,7 +2,7 @@
 
 This package provides native Go bindings to the Gatekeeper CDR core using CGo.
 
-Because the underlying engine is written in Rust, you must have the Rust toolchain (`cargo`) installed on your system to compile the static library (`libgatekeeper.a`) before your Go code can link to it.
+We distribute pre-compiled static libraries for Linux, macOS, and Windows directly in this repository. This means you do **not** need Rust installed to use this package in your Go projects!
 
 ## Installation & Setup
 
@@ -11,14 +11,7 @@ Because the underlying engine is written in Rust, you must have the Rust toolcha
    go get github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go
    ```
 
-2. **Generate the Rust backend:**
-   This module uses `go:generate` to invoke Cargo automatically. Run:
-   ```bash
-   go generate github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go
-   ```
-   *(Alternatively, you can manually run `cargo build --release` in the project root).*
-
-3. **Build your Go project:**
+2. **Build your Go project:**
    ```bash
    go build
    ```
@@ -57,3 +50,16 @@ func main() {
 	os.WriteFile("clean.png", clean, 0644)
 }
 ```
+
+## Contributing
+
+If you modify the underlying Rust core (`gatekeeper`), you must recompile the static libraries and copy them into the Go module before committing.
+
+We have provided a helper script to do this automatically for your current OS:
+
+```bash
+cd bindings/go
+./build_go.sh
+```
+
+This will run `cargo build` and copy the resulting `libgatekeeper.a` and `gatekeeper.h` into the `bindings/go/lib/` directory.
