@@ -1,0 +1,8 @@
+# By default, NPM respects .gitignore. Since we put *.node in .gitignore
+# we must explicitly override it here so the built binaries get published!
+*
+!*.js
+!*.d.ts
+!*.node
+!package.json
+!README.md
