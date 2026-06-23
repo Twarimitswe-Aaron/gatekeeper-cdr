@@ -39,7 +39,7 @@ jobs:
 
       - name: Install Node Dependencies
         working-directory: bindings/node
-        run: npm install
+        run: npm ci
 
       - name: Install NAPI CLI Globally
         run: npm install -g @napi-rs/cli@2.18.3
