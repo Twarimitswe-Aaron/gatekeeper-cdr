@@ -39,11 +39,14 @@ jobs:
 
       - name: Install Node Dependencies
         working-directory: bindings/node
-        run: npm install --no-package-lock
+        run: npm install
+
+      - name: Install NAPI CLI Globally
+        run: npm install -g @napi-rs/cli
 
       - name: Build Native Module
         working-directory: bindings/node
-        run: npm run build -- --target ${{ matrix.target }}
+        run: napi build --platform --release --target ${{ matrix.target }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
