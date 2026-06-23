@@ -6,7 +6,7 @@
 
     <groupId>io.github.twarimitswe-aaron</groupId>
     <artifactId>gatekeeper-cdr</artifactId>
-    <version>0.4.2</version>
+    <version>0.4.3</version>
     
     <name>Gatekeeper CDR</name>
     <description>Zero-trust Content Disarm and Reconstruction engine</description>
@@ -21,7 +21,7 @@
         <repository>
             <id>github</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/Twarimitswe-Aaron/gatekeeper-cdr</url>
+            <url>https://maven.pkg.github.com/twarimitswe-aaron/gatekeeper-cdr</url>
         </repository>
     </distributionManagement>
 
