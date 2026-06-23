@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use crate::sanitizers::jpeg::SanitizedOutput;
+
 use crate::sniffer::MIN_SNIFF_LEN;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,9 +55,9 @@ use crate::sniffer::MIN_SNIFF_LEN;
 ///
 /// ## Usage
 /// ```rust,no_run
-/// use gatekeeper::{ImageStream, sanitizers::jpeg::SanitizedOutput};
+/// use gatekeeper::{ImageStream, sniffer::DisarmResult};
 ///
-/// fn handle_upload(raw: Option<&[u8]>) -> Result<SanitizedOutput, Box<dyn std::error::Error>> {
+/// fn handle_upload(raw: Option<&[u8]>) -> Result<DisarmResult, Box<dyn std::error::Error>> {
 ///     let stream = ImageStream::from_option(raw);
 ///     Ok(stream.route()?)
 /// }
@@ -150,7 +150,7 @@ impl<'a> ImageStream<'a> {
     /// let clean = ImageStream::new(&raw)
     ///     .route()
     ///     .expect("CDR failed");
-    /// std::fs::write("clean.png", clean.into_bytes()).unwrap();
+    /// std::fs::write("clean.png", clean.buffer).unwrap();
     /// ```
     pub fn route(self) -> Result<crate::sniffer::DisarmResult, CdrError> {
         // ── Guard 1: let…else — flat early return on absent payload ──────────

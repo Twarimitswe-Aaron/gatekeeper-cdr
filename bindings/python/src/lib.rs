@@ -1,4 +1,4 @@
-use gatekeeper::{disarm as core_disarm, sniff_format as core_sniff_format, CdrError, FileFormat};
+use gatekeeper::{disarm as core_disarm, sniff_format as core_sniff_format, FileFormat};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;

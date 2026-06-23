@@ -1,5 +1,5 @@
 use gatekeeper::{disarm, sniff_format, FileFormat};
-use jni::objects::{JByteArray, JClass, JObject, JString};
+use jni::objects::{JByteArray, JClass, JObject};
 use jni::sys::{jbyteArray, jobject};
 use jni::JNIEnv;
 
@@ -80,7 +80,7 @@ pub extern "system" fn Java_io_github_gatekeeper_GatekeeperCdr_sniffFormat<'loca
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_gatekeeper_GatekeeperCdr_disarm<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     payload: JByteArray<'local>,
 ) -> jbyteArray {

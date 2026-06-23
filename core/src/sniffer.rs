@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use crate::sanitizers::jpeg::{SanitizedOutput, sanitize_jpeg};
+use crate::sanitizers::jpeg::sanitize_jpeg;
 use crate::sanitizers::png::sanitize_png;
 use crate::sanitizers::gif::sanitize_gif;
 use crate::sanitizers::webp::sanitize_webp;
