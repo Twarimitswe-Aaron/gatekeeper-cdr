@@ -1,6 +1,6 @@
 {
   "name": "gatekeeper-cdr",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Zero-trust Content Disarm and Reconstruction native Node.js addon",
   "main": "index.js",
   "napi": {
