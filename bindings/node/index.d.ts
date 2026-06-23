@@ -18,3 +18,21 @@ export interface NodeDisarmResult {
  * @param expectedFormat (Optional) Strict format hint (e.g. "pdf", "png"). Rejects if mismatch.
  */
 export declare function disarm(rawBuffer: Uint8Array, expectedFormat?: string | undefined | null): NodeDisarmResult
+
+/**
+ * Async, non-blocking Content Disarm and Reconstruction pipeline.
+ *
+ * Returns a `Promise<NodeDisarmResult>` that resolves on a background
+ * thread pool, leaving the Node.js event loop completely free.
+ *
+ * @example
+ * ```ts
+ * import { disarmAsync } from 'gatekeeper-cdr';
+ * import { readFileSync } from 'fs';
+ *
+ * const input = readFileSync('suspicious.jpg');
+ * const result = await disarmAsync(input);
+ * // result.buffer is the safe, sanitized output
+ * ```
+ */
+export declare function disarmAsync(rawBuffer: Buffer): Promise<NodeDisarmResult>

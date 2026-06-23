@@ -14,5 +14,8 @@ gatekeeper = { path = "../../core" }
 napi = { version = "2.16.1", default-features = false, features = ["napi4"] }
 napi-derive = "2.16.1"
 
+# Async runtime — needed to drive tokio futures from the NAPI blocking thread
+tokio = { version = "1", features = ["rt", "io-util", "macros"] }
+
 [build-dependencies]
 napi-build = "2.0.1"
