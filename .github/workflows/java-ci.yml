@@ -36,7 +36,12 @@ jobs:
           server-username: ${{ github.actor }}
           server-password: ${{ secrets.GITHUB_TOKEN }}
           
+      - name: Test Native Module
+        working-directory: bindings/java
+        run: mvn test
+          
       - name: Publish to GitHub Packages
+        if: startsWith(github.ref, 'refs/tags/')
         working-directory: bindings/java
         run: mvn deploy
         env:
