@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper"
-version = "0.4.0"
+version = "0.4.3"
 dependencies = [
  "gif",
  "image-webp",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper-java"
-version = "0.4.0"
+version = "0.4.3"
 dependencies = [
  "gatekeeper",
  "jni",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper-python"
-version = "0.4.0"
+version = "0.4.3"
 dependencies = [
  "gatekeeper",
  "pyo3",
