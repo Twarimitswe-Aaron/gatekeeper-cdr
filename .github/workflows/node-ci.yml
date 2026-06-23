@@ -39,7 +39,11 @@ jobs:
 
       - name: Install Node Dependencies
         working-directory: bindings/node
-        run: npm install
+        run: npm install --no-package-lock
+
+      - name: Verify Cargo Build
+        working-directory: bindings/node
+        run: cargo build --target ${{ matrix.target }}
 
       - name: Build Native Module
         working-directory: bindings/node
