@@ -35,3 +35,10 @@ def test_sniff_format_jpeg():
 def test_disarm_invalid_payload():
     with pytest.raises(gatekeeper_cdr.GatekeeperError):
         gatekeeper_cdr.disarm(b"invalid data")
+
+@pytest.mark.asyncio
+async def test_disarm_async_invalid_payload():
+    with pytest.raises(gatekeeper_cdr.GatekeeperError) as exc_info:
+        await gatekeeper_cdr.disarm_async(b"this_is_a_very_long_but_unknown_format_string_1234")
+    assert "unrecognised file magic" in str(exc_info.value).lower()
+

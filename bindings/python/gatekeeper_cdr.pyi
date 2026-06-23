@@ -31,3 +31,18 @@ def disarm(payload: bytes, /) -> bytes:
         GatekeeperError: If the payload is invalid, corrupt, or exceeds limits.
     """
     ...
+
+async def disarm_async(payload: bytes, /) -> bytes:
+    """
+    Async, non-blocking Content Disarm and Reconstruction pipeline.
+    
+    Args:
+        payload (bytes): The raw untrusted file bytes.
+        
+    Returns:
+        bytes: A sanitized, re-encoded file output that shares zero bytes with the original.
+        
+    Raises:
+        GatekeeperError: If the payload is invalid, corrupt, or exceeds limits.
+    """
+    ...

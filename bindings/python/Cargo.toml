@@ -10,6 +10,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gatekeeper = { path = "../../core" }
-pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"] }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "io-util", "macros"] }
+# Bridges Rust tokio futures into native Python asyncio coroutines
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
 
 

@@ -21,4 +21,5 @@ strip = true
 [project.optional-dependencies]
 test = [
     "pytest",
+    "pytest-asyncio",
 ]
