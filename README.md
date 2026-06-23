@@ -347,7 +347,7 @@ These bindings do not exist yet — they are the design target for Phases 7–11
 | PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — complete |
 | C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — complete |
 | Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go` | Phase 10 — complete |
-| Java     | JNI via `jni` crate | Maven / Gradle dependency | Phase 11 — planned |
+| Java     | JNI via `jni` crate | Maven / Gradle dependency | Phase 11 — complete |
 
 ---
 
@@ -530,7 +530,6 @@ func main() {
 
 ### Java (via JNI)
 
-<!-- PLANNED — not yet implemented. Will be published to Maven Central. -->
 
 ```xml
 <!-- Maven (pom.xml) -->
@@ -569,7 +568,7 @@ public class Main {
 }
 ```
 
-<!-- END PLANNED -->
+
 
 ---
 
@@ -585,7 +584,7 @@ public class Main {
 - [x] **Phase 8** — `PyO3` Python bindings → publish to PyPI
 - [x] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
 - [x] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
-- [ ] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
+- [x] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
 - [ ] **Phase 12** — Async pipeline via Tokio for streaming large files
 - [ ] **Phase 13** — WASM target for browser-side CDR
 

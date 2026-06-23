@@ -1,0 +1,13 @@
+[package]
+name = "gatekeeper-java"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "gatekeeper_java"
+crate-type = ["cdylib"]
+
+[dependencies]
+gatekeeper = { path = "../../core" }
+jni = "0.21.1"
