@@ -53,6 +53,7 @@ pub mod ffi;
 pub mod sanitizers;
 pub mod sniffer;
 pub mod stream;
+pub mod async_stream;
 
 // ── Public API facade ────────────────────────────────────────────────────────
 // All items below are re-exported at the crate root so downstream consumers
@@ -66,6 +67,9 @@ pub use sniffer::{FileFormat, disarm, sniff_format};
 
 /// Streaming, optional-payload wrapper — re-exported from [`stream`].
 pub use stream::ImageStream;
+
+/// Async streaming wrapper and convenience function — re-exported from [`async_stream`].
+pub use async_stream::{AsyncImageStream, disarm_bytes_async};
 
 /// Terminal sanitised-output token and its JPEG-pipeline alias.
 pub use sanitizers::jpeg::{DisarmedPayload, SanitizedOutput, sanitize_jpeg};
@@ -420,6 +424,65 @@ mod tests {
         assert!(
             matches!(result, Err(CdrError::ImageTooLarge { .. })),
             "expected ImageTooLarge for 16384×16384 RGBA PNG, got {result:?}"
+        );
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+//  Async streaming tests
+// ───────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod async_tests {
+    use crate::errors::CdrError;
+    use crate::async_stream::disarm_bytes_async;
+
+    /// An empty buffer must immediately return `PayloadTooShort` without panicking.
+    #[tokio::test]
+    async fn async_rejects_empty_payload() {
+        let err = disarm_bytes_async(&[]).await.unwrap_err();
+        assert!(
+            matches!(err, CdrError::PayloadTooShort { got: 0 }),
+            "expected PayloadTooShort{{got:0}}, got {err:?}"
+        );
+    }
+
+    /// A buffer shorter than MIN_SNIFF_LEN (16 bytes) must return `PayloadTooShort`.
+    #[tokio::test]
+    async fn async_rejects_short_payload() {
+        let short = vec![0u8; 8];
+        let err = disarm_bytes_async(&short).await.unwrap_err();
+        assert!(
+            matches!(err, CdrError::PayloadTooShort { got: 8 }),
+            "expected PayloadTooShort{{got:8}}, got {err:?}"
+        );
+    }
+
+    /// Garbage bytes with no recognised magic must return `UnknownFormat`.
+    #[tokio::test]
+    async fn async_rejects_unknown_format() {
+        let garbage = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03,
+                           0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];
+        let err = disarm_bytes_async(&garbage).await.unwrap_err();
+        assert!(
+            matches!(err, CdrError::UnknownFormat { .. }),
+            "expected UnknownFormat, got {err:?}"
+        );
+    }
+
+    /// A structurally valid JPEG (SOI + EOI with no image data) must
+    /// route through the async pipeline and fail at decode, NOT at format
+    /// detection, confirming that async dispatch works end-to-end.
+    #[tokio::test]
+    async fn async_routes_jpeg_to_decoder() {
+        // SOI + 14 zero-padded bytes + EOI — detectable as JPEG but
+        // degenerate, so the decoder must reject it rather than the sniffer.
+        let mut jpeg = vec![0xFF, 0xD8];
+        jpeg.extend_from_slice(&[0x00; 14]);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let err = disarm_bytes_async(&jpeg).await.unwrap_err();
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "JPEG magic should be recognised; sniffer should not reject it as UnknownFormat. Got {err:?}"
         );
     }
 }

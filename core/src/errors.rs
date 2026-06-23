@@ -144,6 +144,15 @@ pub enum CdrError {
     #[error("PDF encode failure: {source}")]
     PdfEncodeFailed { source: std::io::Error },
 
+    // ── Stage 7 – Async I/O ───────────────────────────────────────────────
+    /// An underlying I/O error occurred while reading from an async source.
+    ///
+    /// `message` preserves the OS error description as a heap String here
+    /// because I/O errors are inherently dynamic and rare on the error path;
+    /// the allocation cost is acceptable.
+    #[error("async I/O error: {message}")]
+    IoError { message: String },
+
     // ── Stage 0 – Unimplemented format stub ───────────────────────────────
     /// The format was recognised but its sanitisation pipeline has not yet
     /// been implemented.

@@ -38,6 +38,20 @@ image-webp = "0.2.0"
 zip = "8.6.0"
 lopdf = "0.41.0"
 
+# ── Async runtime ─────────────────────────────────────────────────────────────
+# tokio is the industry-standard Rust async runtime. We use `rt` (single or
+# multi-threaded scheduler) and `io-util` (AsyncReadExt helpers) only, keeping
+# the dependency surface minimal in the core engine.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "io-util", "macros"] }
+
+# bytes provides zero-copy byte buffer types (Bytes / BytesMut) that avoid
+# re-allocating when passing chunks through async pipelines.
+bytes = "1"
+
+# futures supplies the Stream and Sink traits that our async streaming
+# adaptor implements.
+futures = "0.3"
+
 # ── Development & testing dependencies ───────────────────────────────────────
 [dev-dependencies]
 jpeg-encoder = "0.3"
