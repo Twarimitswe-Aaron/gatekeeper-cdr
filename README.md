@@ -346,7 +346,7 @@ These bindings do not exist yet — they are the design target for Phases 7–11
 | Python   | `PyO3`       | `pip install gatekeeper-cdr` | Phase 8 — complete |
 | PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — complete |
 | C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — complete |
-| Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr` | Phase 10 — planned |
+| Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go` | Phase 10 — complete |
 | Java     | JNI via `jni` crate | Maven / Gradle dependency | Phase 11 — planned |
 
 ---
@@ -489,21 +489,16 @@ int main(void) {
 ### Go (via CGo)
 
 <!-- PLANNED — not yet implemented. Will be distributed as a Go module on pkg.go.dev. -->
-
 ```go
 // Install:
-//   go get github.com/Twarimitswe-Aaron/gatekeeper-cdr
-//
-// Requires CGo enabled (default) and the compiled libgatekeeper.so
-// on your library path, or bundled via the Go module build tags.
+//   go get github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go
 
 package main
 
 import (
     "fmt"
     "os"
-
-    gatekeeper "github.com/Twarimitswe-Aaron/gatekeeper-cdr"
+    gatekeeper "github.com/Twarimitswe-Aaron/gatekeeper-cdr/bindings/go"
 )
 
 func main() {
@@ -589,7 +584,7 @@ public class Main {
 - [x] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
 - [x] **Phase 8** — `PyO3` Python bindings → publish to PyPI
 - [x] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
-- [ ] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
+- [x] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
 - [ ] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
 - [ ] **Phase 12** — Async pipeline via Tokio for streaming large files
 - [ ] **Phase 13** — WASM target for browser-side CDR

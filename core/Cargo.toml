@@ -13,7 +13,7 @@ categories  = ["parser-implementations", "encoding", "multimedia::images"]
 # rlib    → Rust linkable library for downstream Rust crates
 [lib]
 name      = "gatekeeper"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
 
 # ── Core runtime dependencies ─────────────────────────────────────────────────
 [dependencies]
