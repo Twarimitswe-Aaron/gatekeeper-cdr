@@ -1,0 +1,13 @@
+[package]
+name = "gatekeeper-php"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "gatekeeper_php"
+crate-type = ["cdylib"]
+
+[dependencies]
+gatekeeper = { path = "../../core" }
+ext-php-rs = "0.12.0"

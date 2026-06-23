@@ -344,8 +344,8 @@ These bindings do not exist yet — they are the design target for Phases 7–11
 |----------|--------------|-----------------|--------|
 | Node.js  | `napi-rs`    | `npm install gatekeeper-cdr` | Phase 7 — complete |
 | Python   | `PyO3`       | `pip install gatekeeper-cdr` | Phase 8 — complete |
-| PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — planned |
-| C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — planned |
+| PHP      | `ext-php-rs` | `composer require gatekeeper/cdr` | Phase 9 — complete |
+| C / C++  | Raw `extern "C"` | Link `libgatekeeper.so` | Phase 9 — complete |
 | Go       | CGo + `extern "C"` | `go get github.com/Twarimitswe-Aaron/gatekeeper-cdr` | Phase 10 — planned |
 | Java     | JNI via `jni` crate | Maven / Gradle dependency | Phase 11 — planned |
 
@@ -414,7 +414,7 @@ with open("clean.png", "wb") as f:
 
 ### PHP (via ext-php-rs)
 
-<!-- PLANNED — not yet implemented. Will be distributed as a compiled .so extension. -->
+
 
 ```php
 <?php
@@ -444,7 +444,7 @@ file_put_contents('clean.png', $clean);
 
 ### C / C++ (Raw FFI)
 
-<!-- PLANNED — not yet implemented. The extern "C" header will ship alongside the cdylib. -->
+
 
 ```c
 // Link against:  -L. -lgatekeeper -Wl,-rpath,.
@@ -482,7 +482,7 @@ int main(void) {
 }
 ```
 
-<!-- END PLANNED -->
+
 
 ---
 
@@ -588,7 +588,7 @@ public class Main {
 - [x] **Phase 6** — Office format sanitization (DOCX / XLSX / PPTX)
 - [x] **Phase 7** — `napi-rs` Node.js bindings → publish to npm
 - [x] **Phase 8** — `PyO3` Python bindings → publish to PyPI
-- [ ] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
+- [x] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
 - [ ] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
 - [ ] **Phase 11** — JNI Java bindings → publish to Maven Central / Gradle
 - [ ] **Phase 12** — Async pipeline via Tokio for streaming large files

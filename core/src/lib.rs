@@ -49,6 +49,7 @@
 //! ```
 
 pub mod errors;
+pub mod ffi;
 pub mod sanitizers;
 pub mod sniffer;
 pub mod stream;

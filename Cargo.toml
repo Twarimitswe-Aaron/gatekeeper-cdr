@@ -4,7 +4,7 @@ members = [
     "bindings/node",
     "bindings/python",  # Phase 8 implementation
     # "bindings/go",      # To be implemented
-    # "bindings/php",     # To be implemented
+    "bindings/php",     # Phase 9 implementation
     # "bindings/java",    # To be implemented
 ]
 
