@@ -143,6 +143,16 @@ pub enum CdrError {
 }
 ```
 
+### Storage vs Security Tradeoffs (File Size)
+
+Gatekeeper enforces a strict zero-trust policy. This means it **never** attempts to clean a file in place. Instead, it decodes the file into raw, uncompressed pixels and re-encodes it from scratch as a brand new **lossless PNG**. 
+
+As a result, you will often observe file size increases during sanitization. This is an intentional security tradeoff:
+
+*   **JPEG to PNG Conversion**: JPEGs are heavily compressed, lossy formats that drop visual data to save space. Gatekeeper reconstructs them as lossless PNGs to guarantee no hidden payloads (like embedded exploits in APP markers) survive. Perfectly representing lossy JPEG pixels in a lossless format naturally inflates the byte size, often by 2x to 5x.
+*   **PNG to PNG Filtering**: Original PNG files are often compressed using slow, exhaustive filtering algorithms (like Zopfli or OptiPNG) that try thousands of combinations to squeeze every byte. Gatekeeper is designed for **real-time sanitization** at the edge. We use `Compression::Best`, but we do not spend seconds brute-forcing filters.
+*   **Resolution & Quality**: This compression step **does not** alter the image pixels or reduce resolution. The output is 100% structurally and visually identical to the safe pixel matrix, just wrapped in a completely untainted PNG container.
+
 ---
 
 ## Supported Formats
