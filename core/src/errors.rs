@@ -122,6 +122,10 @@ pub enum CdrError {
     #[error("PNG re-encode failure: {source}")]
     PngEncodeFailed { source: png::EncodingError },
 
+    /// The GIF encoder returned an error while writing into the output buffer.
+    #[error("GIF re-encode failure: {source}")]
+    GifEncodeFailed { source: gif::EncodingError },
+
     // ── Stage 5 – Office Formats ──────────────────────────────────────────
     /// The ZIP decoder surfaced a structural error in the input stream.
     #[error("ZIP decode failure: {source}")]

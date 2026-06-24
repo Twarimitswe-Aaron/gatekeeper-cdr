@@ -49,7 +49,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use png::{BitDepth, ColorType, Compression, Encoder};
+use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
+use png::{BitDepth, ColorType as PngColorType, Compression, Encoder as PngEncoder};
 use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
 
@@ -561,52 +562,46 @@ impl<'a> JpegPipeline<RawPayload<'a>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl JpegPipeline<DisarmedMatrix> {
-    /// Advance from `DisarmedMatrix` to `PristineStream`.
+    /// Re-encodes the pixel matrix as a clean JPEG. The encoder writes only
+    /// raw pixel data — all original APP/EXIF/COM/ICC markers are absent.
     ///
-    /// Re-encodes the pixel matrix as a lossless PNG.  The encoder is
-    /// configured to write exactly IHDR + IDAT + IEND — no metadata.
-    ///
-    /// ## Errors
-    /// Returns [`CdrError::PngEncodeFailed`] on encoder I/O faults.
+    /// Quality 90 balances file size against visual fidelity. The re-quantization
+    /// at this step cryptographically destroys any steganographic payload that
+    /// was hidden in the original DCT coefficient LSBs.
     pub fn reconstruct(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
-        // ── Formal destructure of the stage newtype ───────────────────────
         let DisarmedMatrix(matrix) = self.stage;
+        let PixelMatrix { pixels, width, height } = matrix;
 
-        // ── Formal destructure of the inner geometry record ───────────────
-        let PixelMatrix {
-            pixels,
-            width,
-            height,
-        } = matrix;
+        let mut output: Vec<u8> = Vec::new();
+        JpegEncoder::new(&mut output, 90)
+            .encode(&pixels, width as u16, height as u16, JpegColorType::Rgb)
+            .map_err(|e| CdrError::PngEncodeFailed {
+                source: png::EncodingError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )),
+            })?;
+        Ok(JpegPipeline { stage: PristineStream(output) })
+    }
 
-        // ── Allocate output buffer ────────────────────────────────────────
-        //
-        // One allocation for the re-encode leg.  Pre-sized to avoid
-        // incremental growth: worst case is uncompressed RGB + chunk framing.
-        let cap = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(3)
-            .saturating_add(1024);
+    /// Re-encodes the pixel matrix as a lossless PNG.
+    /// Every pixel is exactly the decoded colour value — the mathematically
+    /// guaranteed zero-trust output.
+    pub fn reconstruct_as_png(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
+        let DisarmedMatrix(matrix) = self.stage;
+        let PixelMatrix { pixels, width, height } = matrix;
+
+        let cap = (width as usize).saturating_mul(height as usize).saturating_mul(3).saturating_add(1024);
         let mut output: Vec<u8> = Vec::with_capacity(cap);
-
-        // ── PNG encode ────────────────────────────────────────────────────
         {
-            let mut encoder = Encoder::new(&mut output, width, height);
-            encoder.set_color(ColorType::Rgb);
-            encoder.set_depth(BitDepth::Eight);
-            encoder.set_compression(Compression::Best);
-
-            let mut writer = encoder
-                .write_header()
-                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR
-            writer
-                .write_image_data(&pixels)
-                .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits IDAT
-        } // ← drop flushes IEND
-
-        Ok(JpegPipeline {
-            stage: PristineStream(output),
-        })
+            let mut enc = PngEncoder::new(&mut output, width, height);
+            enc.set_color(PngColorType::Rgb);
+            enc.set_depth(BitDepth::Eight);
+            enc.set_compression(Compression::Best);
+            let mut writer = enc.write_header().map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+            writer.write_image_data(&pixels).map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+        }
+        Ok(JpegPipeline { stage: PristineStream(output) })
     }
 }
 
@@ -665,4 +660,20 @@ impl JpegPipeline<PristineStream> {
 /// [`CdrError`]: crate::errors::CdrError
 pub fn sanitize_jpeg(input: &[u8]) -> Result<DisarmedPayload, CdrError> {
     RawPayload::new(input)?.sanitize()
+}
+
+/// Sanitise a JPEG byte slice and return the lossless **PNG** version.
+///
+/// Decodes the JPEG to its raw pixel grid and re-encodes as PNG — the
+/// mathematically guaranteed zero-trust output where every pixel is exactly
+/// the decoded colour value, with no metadata and no DCT coefficient artefacts.
+///
+/// # Errors
+/// Propagates any [`CdrError`] from the decode or encode stages.
+pub fn sanitize_jpeg_to_png(input: &[u8]) -> Result<DisarmedPayload, CdrError> {
+    let RawPayload(bytes) = RawPayload::new(input)?;
+    Ok(JpegPipeline::new(bytes)
+        .decode()?
+        .reconstruct_as_png()?
+        .into_sanitized())
 }

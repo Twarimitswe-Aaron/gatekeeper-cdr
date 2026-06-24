@@ -133,38 +133,114 @@ pub enum CdrError {
     PngMissingIhdr,
     JpegDecodeFailed     { source: zune_jpeg::errors::DecodeErrors },
     PngDecodeFailed      { source: png::DecodingError },
+    GifDecodeFailed      { source: gif::DecodingError },
     MissingImageInfo,
     DegenerateDimensions { width: u32, height: u32 },
     DimensionTooLarge    { dimension: u32, limit: u32 },
     ImageTooLarge        { bytes: usize, limit: usize },
     PixelBufferMismatch  { expected: usize, got: usize },
     PngEncodeFailed      { source: png::EncodingError },
+    GifEncodeFailed      { source: gif::EncodingError },
     Unimplemented        { format: &'static str },  // stub — fails closed
 }
 ```
 
+### Dual-Output Contract
+
+Every call to `disarm()` returns a `DisarmResult` containing **two buffers**:
+
+```
+DisarmResult {
+    buffer:           Vec<u8>         // sanitized in the ORIGINAL input format
+    png_buffer:       Option<Vec<u8>> // lossless PNG version (None when buffer IS already PNG)
+    detected_format:  &'static str    // "jpeg" | "png" | "gif" | "webp" | "office" | "pdf"
+    output_format:    &'static str    // format of buffer
+    original_size_bytes: usize
+    final_size_bytes:    usize        // size of buffer
+}
+```
+
+| Input | `buffer` | `png_buffer` | Rationale |
+|-------|----------|-------------|----------|
+| JPEG | JPEG (q90, metadata stripped) | `Some(PNG)` | Two distinct representations |
+| PNG | PNG (lossless) | `None` | `buffer` IS already the lossless PNG |
+| GIF | GIF (extensions stripped) | `Some(PNG)` | Two distinct representations |
+| WebP | PNG (no Rust WebP encoder) | `None` | `buffer` IS already the lossless PNG |
+| PDF | PDF (JS/actions stripped) | `None` | Not an image |
+| Office | Office/ZIP (`.bin` stripped) | `None` | Not an image |
+
 ### Storage vs Security Tradeoffs (File Size)
 
-Gatekeeper enforces a strict zero-trust policy. This means it **never** attempts to clean a file in place. Instead, it decodes the file into raw, uncompressed pixels and re-encodes it from scratch as a brand new **lossless PNG**. 
+Gatekeeper enforces a strict zero-trust policy. It **never** attempts to clean a file in place. Instead, it fully decodes the file to a raw pixel matrix and re-encodes it from scratch, sharing **zero bytes** with the original.
 
-As a result, you will often observe file size increases during sanitization. This is an intentional security tradeoff:
+As a result, you may observe file size changes during sanitization:
 
-*   **JPEG to PNG Conversion**: JPEGs are heavily compressed, lossy formats that drop visual data to save space. Gatekeeper reconstructs them as lossless PNGs to guarantee no hidden payloads (like embedded exploits in APP markers) survive. Perfectly representing lossy JPEG pixels in a lossless format naturally inflates the byte size, often by 2x to 5x.
-*   **PNG to PNG Filtering**: Original PNG files are often compressed using slow, exhaustive filtering algorithms (like Zopfli or OptiPNG) that try thousands of combinations to squeeze every byte. Gatekeeper is designed for **real-time sanitization** at the edge. We use `Compression::Best`, but we do not spend seconds brute-forcing filters.
-*   **Resolution & Quality**: This compression step **does not** alter the image pixels or reduce resolution. The output is 100% structurally and visually identical to the safe pixel matrix, just wrapped in a completely untainted PNG container.
+- **JPEG → JPEG**: Re-quantization at quality 90 strips all metadata and destroys steganographic LSB payloads. File sizes are similar to the original, sometimes slightly larger or smaller depending on content.
+- **JPEG → PNG (png_buffer)**: The lossless PNG counterpart is typically 2–5× larger than the JPEG because lossless encoding fully represents what lossy JPEG had approximated.
+- **PNG → PNG**: Original PNGs may have been compressed with slow exhaustive optimizers (Zopfli, OptiPNG). Gatekeeper's real-time `Compression::Best` pass produces slightly larger output but is orders of magnitude faster.
+- **GIF → GIF**: Re-indexed from the original palette. Colours may shift slightly on palette-heavy images due to nearest-colour quantization.
+- **GIF → PNG (png_buffer)**: Lossless RGBA PNG — guarantees exact pixel values, typically larger than the GIF.
+
+---
+
+## Enterprise Readiness Analysis
+
+### What Gatekeeper Already Does Right
+
+| Property | Status | Detail |
+|----------|--------|--------|
+| Zero-copy format detection | ✅ | Magic bytes compared via direct slice equality, no allocations |
+| Decompression-bomb guards | ✅ | Geometry + pixel-budget checks fire **before** any allocation |
+| Typestate pipeline | ✅ | Stage transitions are compile errors, not runtime panics |
+| Dual-output (native + PNG) | ✅ | Single call returns both the native format and a lossless PNG |
+| No `String` on error paths | ✅ | Every `CdrError` variant carries typed structured data |
+| Async streaming | ✅ | `AsyncImageStream` + `disarm_bytes_async()` via Tokio |
+| Input size caps | ✅ | Hard limits enforced before any decoder work begins |
+
+### Known Gaps vs. Enterprise CDR
+
+Commercial CDR products (Glasswall, Votiro, OPSWAT MetaDefender) address the following that Gatekeeper does not yet:
+
+| Gap | Impact | Planned Fix |
+|-----|--------|-------------|
+| **Double decode for JPEG dual-output** | 2× CPU cost per JPEG; highest-priority fix | `sanitize_jpeg_dual()` — decode once, encode to both JPEG and PNG from the same pixel buffer (Phase 12) |
+| **32 MiB hard input cap** | Blocks large document workflows | `CdrPolicy` struct passed into `disarm()` with configurable limits (Phase 13) |
+| **No deterministic JPEG output** | Encoder version changes produce different bytes for the same input | Use a fixed published quantization table instead of quality parameter |
+| **No audit receipt** | Cannot cryptographically prove a file was sanitized | Return a `Blake3` hash of the output buffer alongside the bytes |
+| **No policy engine** | One fixed set of limits for all callers | `CdrPolicy { max_bytes, jpeg_quality, allowed_formats, … }` |
+| **WebP output is PNG** | Format change surprises callers expecting WebP back | Add `libwebp` bindings via `webp` crate for true WebP→WebP |
+| **GIF nearest-colour quantization** | Palette-heavy images shift colours visibly | Replace Euclidean distance with median-cut or Wu quantization |
+
+### Is the Current Approach Production-Ready?
+
+For **embedded / edge deployments** (IoT gateways, upload proxies, CI artifact scanning) — **yes**. The architecture is sound: zero-copy parsing, compile-time stage enforcement, bomb guards, and dual-output with no wasted allocations.
+
+For **enterprise SaaS at scale** (100k+ files/day), the single highest-impact change is eliminating the **double decode** for JPEG:
+
+```rust
+// Current: 2 decode passes per JPEG
+let jpeg_bytes = sanitize_jpeg(payload)?.into_bytes();
+let png_bytes  = sanitize_jpeg_to_png(payload)?.into_bytes();
+
+// Phase 12 target: 1 decode, 2 encodes
+let (jpeg_bytes, png_bytes) = sanitize_jpeg_dual(payload)?;
+//                             ^^ decode once → encode to JPEG + PNG simultaneously
+```
+
+This single change halves CPU cost for all JPEG inputs. Everything else in the roadmap is additive.
 
 ---
 
 ## Supported Formats
 
-| Format | Detection | Sanitize | Re-encode | Status |
-|--------|-----------|----------|-----------|--------|
-| JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ PNG output | **Phase 2 — complete** |
-| PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG output | **Phase 3 — complete** |
-| GIF    | ✅ Magic check | ✅ gif crate decode | ✅ PNG output | **Phase 4 — complete** |
-| WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG output | **Phase 4 — complete** |
-| Office | ✅ ZIP Magic check | ✅ ZIP unwrap, drop `.bin` | ✅ ZIP re-encode | **Phase 6 — complete** |
-| PDF    | ✅ `%PDF-` check | ✅ `lopdf` AST load | ✅ AST strip / re-encode | **Phase 5 — complete** |
+| Format | Detection | Sanitize | Native Output | PNG Output | Status |
+|--------|-----------|----------|---------------|------------|--------|
+| JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ JPEG (q90, all metadata stripped) | ✅ Lossless PNG | **Phase 2 — complete** |
+| PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG (lossless) | — (buffer IS the PNG) | **Phase 3 — complete** |
+| GIF    | ✅ Magic check | ✅ gif crate decode | ✅ GIF (re-indexed, extensions stripped) | ✅ Lossless RGBA PNG | **Phase 4 — complete** |
+| WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG (no pure-Rust encoder) | — (buffer IS the PNG) | **Phase 4 — complete** |
+| Office | ✅ ZIP Magic check | ✅ ZIP unwrap, drop `.bin` | ✅ ZIP re-encode | — (not an image) | **Phase 6 — complete** |
+| PDF    | ✅ `%PDF-` check | ✅ `lopdf` AST load | ✅ AST strip / re-encode | — (not an image) | **Phase 5 — complete** |
 
 ---
 
@@ -597,8 +673,10 @@ public class Main {
 - [x] **Phase 9** — `ext-php-rs` PHP bindings + C/C++ raw header → publish to Packagist
 - [x] **Phase 10** — CGo Go bindings → publish Go module to pkg.go.dev
 - [x] **Phase 11** — JNI Java bindings → *pending Maven Central publish*
-- [ ] **Phase 12** — Async pipeline via Tokio for streaming large files
-- [ ] **Phase 13** — WASM target for browser-side CDR
+- [ ] **Phase 12** — Single-pass JPEG dual-output (`sanitize_jpeg_dual`) to eliminate double-decode
+- [ ] **Phase 13** — `CdrPolicy` struct: configurable size limits, quality, format allowlist
+- [ ] **Phase 14** — Async pipeline via Tokio for streaming large files
+- [ ] **Phase 15** — WASM target for browser-side CDR
 
 ---
 

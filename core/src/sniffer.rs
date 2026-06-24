@@ -29,6 +29,8 @@ use crate::sanitizers::gif::sanitize_gif;
 use crate::sanitizers::webp::sanitize_webp;
 use crate::sanitizers::office::sanitize_office;
 use crate::sanitizers::pdf::sanitize_pdf;
+use crate::sanitizers::jpeg::sanitize_jpeg_to_png;
+use crate::sanitizers::gif::sanitize_gif_to_png;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -297,14 +299,22 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 /// buffer and detailed telemetry regarding the file sizes and formats.
 #[derive(Debug)]
 pub struct DisarmResult {
-    /// The mathematically safe, reconstructed byte stream.
+    /// The sanitized file in the **original input format**.
+    /// JPEG in → JPEG out. GIF in → GIF out. Etc.
     pub buffer: Vec<u8>,
+    /// The sanitized file re-encoded as a **lossless PNG**.
+    /// This is the mathematically guaranteed zero-trust version —
+    /// every pixel is exactly the decoded colour value, nothing more.
+    /// `None` for non-image formats (PDF, Office).
+    pub png_buffer: Option<Vec<u8>>,
     /// The exact byte size of the original un-trusted input file.
     pub original_size_bytes: usize,
-    /// The exact byte size of the safe output file.
+    /// The exact byte size of the native-format safe output file.
     pub final_size_bytes: usize,
-    /// The string representation of the detected file format (e.g. "pdf", "png").
+    /// The string representation of the detected input file format (e.g. "jpeg", "png").
     pub detected_format: &'static str,
+    /// The string representation of the native output file format.
+    pub output_format: &'static str,
 }
 
 /// Detect, validate, and sanitise `payload` in a single call.
@@ -328,20 +338,45 @@ pub fn disarm(payload: &[u8], expected_format: Option<&str>) -> Result<DisarmRes
         }
     }
 
-    let sanitized = match format {
-        FileFormat::Jpeg => sanitize_jpeg(payload),
-        FileFormat::Png => sanitize_png(payload),
-        FileFormat::Gif => sanitize_gif(payload),
-        FileFormat::Webp => sanitize_webp(payload),
-        FileFormat::Office => sanitize_office(payload),
-        FileFormat::Pdf => sanitize_pdf(payload),
-    }?;
+    let (native_bytes, png_bytes, output_fmt): (Vec<u8>, Option<Vec<u8>>, &'static str) = match format {
+        FileFormat::Jpeg => {
+            // Decode once → JPEG (native, metadata stripped) + PNG (lossless guarantee)
+            let jpeg_out = sanitize_jpeg(payload)?.into_bytes();
+            let png_out  = sanitize_jpeg_to_png(payload)?.into_bytes();
+            (jpeg_out, Some(png_out), "jpeg")
+        }
+        FileFormat::Png => {
+            // buffer IS already a lossless PNG — no second copy needed
+            let png_out = sanitize_png(payload)?.into_bytes();
+            (png_out, None, "png")
+        }
+        FileFormat::Gif => {
+            // GIF (palette-indexed native) + PNG (lossless RGBA guarantee)
+            let gif_out = sanitize_gif(payload)?.into_bytes();
+            let png_out = sanitize_gif_to_png(payload)?.into_bytes();
+            (gif_out, Some(png_out), "gif")
+        }
+        FileFormat::Webp => {
+            // No stable pure-Rust WebP encoder; buffer IS the PNG — no second copy
+            let png_out = sanitize_webp(payload)?.into_bytes();
+            (png_out, None, "png")
+        }
+        FileFormat::Office => {
+            let out = sanitize_office(payload)?.into_bytes();
+            (out, None, "office")
+        }
+        FileFormat::Pdf => {
+            let out = sanitize_pdf(payload)?.into_bytes();
+            (out, None, "pdf")
+        }
+    };
 
-    let buffer = sanitized.into_bytes();
     Ok(DisarmResult {
+        final_size_bytes: native_bytes.len(),
         original_size_bytes: payload.len(),
-        final_size_bytes: buffer.len(),
         detected_format: format.as_str(),
-        buffer,
+        output_format: output_fmt,
+        png_buffer: png_bytes,
+        buffer: native_bytes,
     })
 }

@@ -72,7 +72,7 @@ pub use stream::ImageStream;
 pub use async_stream::{AsyncImageStream, disarm_bytes_async};
 
 /// Terminal sanitised-output token and its JPEG-pipeline alias.
-pub use sanitizers::jpeg::{DisarmedPayload, SanitizedOutput, sanitize_jpeg};
+pub use sanitizers::jpeg::{DisarmedPayload, SanitizedOutput, sanitize_jpeg, sanitize_jpeg_to_png};
 
 /// Typestate pipeline entry point for JPEG inputs.
 pub use sanitizers::jpeg::RawPayload;
@@ -83,7 +83,7 @@ pub use sanitizers::png::sanitize_png;
 pub use sanitizers::png::RawPngPayload;
 
 /// Convenience free-function CDR entry point for GIF inputs.
-pub use sanitizers::gif::sanitize_gif;
+pub use sanitizers::gif::{sanitize_gif, sanitize_gif_to_png};
 
 /// Typestate pipeline entry point for GIF inputs.
 pub use sanitizers::gif::RawGifPayload;
