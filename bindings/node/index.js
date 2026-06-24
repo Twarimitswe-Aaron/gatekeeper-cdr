@@ -310,6 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { disarm } = nativeBinding
+const { disarm, disarmAsync } = nativeBinding
 
 module.exports.disarm = disarm
+module.exports.disarmAsync = disarmAsync
