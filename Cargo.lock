@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "bytes",
  "futures",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper-java"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "gatekeeper",
  "jni",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper-python"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "gatekeeper",
  "pyo3",

@@ -47,7 +47,7 @@
 
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use png::{BitDepth, ColorType, Compression, Decoder, Encoder, FilterType};
+use png::{BitDepth, ColorType, Compression, Decoder, Encoder};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PNG magic byte constants (module-private, stack-allocated)

@@ -1,3 +1,6 @@
+#![allow(unexpected_cfgs)]
+#![allow(unsafe_op_in_unsafe_fn)]
+
 use gatekeeper::{disarm as core_disarm, sniff_format as core_sniff_format, FileFormat};
 use gatekeeper::async_stream::disarm_bytes_async;
 use pyo3::create_exception;
