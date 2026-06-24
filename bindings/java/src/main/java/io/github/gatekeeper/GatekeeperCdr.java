@@ -3,9 +3,15 @@ package io.github.gatekeeper;
 public class GatekeeperCdr {
     
     static {
-        // This will load libgatekeeper_java.so (Linux), gatekeeper_java.dll (Windows), or libgatekeeper_java.dylib (Mac)
-        // Ensure that java.library.path is set correctly or the library is bundled in your jar.
-        System.loadLibrary("gatekeeper_java");
+        try {
+            // Check OS and Architecture here in a full implementation.
+            // For now, load the Linux x64 binary bundled in the JAR.
+            NativeUtils.loadLibraryFromJar("/native/linux/libgatekeeper_java.so");
+        } catch (Exception e) {
+            System.err.println("Failed to load native Gatekeeper library from JAR: " + e.getMessage());
+            // Fallback for local development
+            System.loadLibrary("gatekeeper_java");
+        }
     }
 
     /**

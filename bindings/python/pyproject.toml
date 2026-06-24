@@ -13,13 +13,13 @@ classifiers = [
 ]
 dynamic = ["version", "description", "readme"]
 
-[tool.maturin]
-features = ["pyo3/extension-module"]
-module-name = "gatekeeper_cdr"
-strip = true
-
 [project.optional-dependencies]
 test = [
     "pytest",
     "pytest-asyncio",
 ]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "gatekeeper_cdr"
+strip = true
