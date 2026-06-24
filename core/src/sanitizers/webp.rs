@@ -1,6 +1,6 @@
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use png::{BitDepth, ColorType, Encoder};
+use png::{BitDepth, ColorType, Compression, Encoder};
 use image_webp::WebPDecoder;
 
 const MAX_DIMENSION: u32 = 16_384;
@@ -120,6 +120,7 @@ impl WebpPipeline<DisarmedWebpMatrix> {
             let mut encoder = Encoder::new(&mut output, width, height);
             encoder.set_color(color_type);
             encoder.set_depth(bit_depth);
+            encoder.set_compression(Compression::Best);
 
             let mut writer = encoder.write_header().map_err(|e| CdrError::PngEncodeFailed { source: e })?;
             writer.write_image_data(&pixels).map_err(|e| CdrError::PngEncodeFailed { source: e })?;

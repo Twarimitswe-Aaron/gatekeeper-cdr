@@ -49,7 +49,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use png::{BitDepth, ColorType, Encoder};
+use png::{BitDepth, ColorType, Compression, Encoder};
 use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
 
@@ -594,6 +594,7 @@ impl JpegPipeline<DisarmedMatrix> {
             let mut encoder = Encoder::new(&mut output, width, height);
             encoder.set_color(ColorType::Rgb);
             encoder.set_depth(BitDepth::Eight);
+            encoder.set_compression(Compression::Best);
 
             let mut writer = encoder
                 .write_header()

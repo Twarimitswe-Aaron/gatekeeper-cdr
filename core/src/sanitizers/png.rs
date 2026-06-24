@@ -47,7 +47,7 @@
 
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use png::{BitDepth, ColorType, Decoder, Encoder};
+use png::{BitDepth, ColorType, Compression, Decoder, Encoder, FilterType};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PNG magic byte constants (module-private, stack-allocated)
@@ -468,7 +468,8 @@ impl PngPipeline<DisarmedPngMatrix> {
             let mut encoder = Encoder::new(&mut output, width, height);
             encoder.set_color(color_type);
             encoder.set_depth(bit_depth);
-            // No metadata methods called — encoder writes IHDR only.
+            encoder.set_compression(Compression::Best);
+
 
             let mut writer = encoder
                 .write_header()
