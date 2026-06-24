@@ -10,11 +10,18 @@ Thank you for your interest in making Gatekeeper better. This document covers ev
 - [Ways to Contribute](#ways-to-contribute)
 - [Before You Start](#before-you-start)
 - [Development Setup](#development-setup)
+  - [1. Fork and clone](#1-fork-and-clone)
+  - [2. Verify toolchain](#2-verify-toolchain)
+  - [3. Enable the Git hooks](#3-enable-the-git-hooks)
+  - [4. Confirm the baseline passes](#4-confirm-the-baseline-passes)
+- [Project Structure](#project-structure)
 - [Branching Strategy](#branching-strategy)
 - [Making a Pull Request (Step-by-Step)](#making-a-pull-request-step-by-step)
 - [Code Standards](#code-standards)
 - [Testing Requirements](#testing-requirements)
 - [Commit Message Format](#commit-message-format)
+- [Working on a Specific Binding](#working-on-a-specific-binding)
+- [Using the Cross-Platform Testbed](#using-the-cross-platform-testbed)
 - [What Makes a Good PR](#what-makes-a-good-pr)
 - [Review Process](#review-process)
 - [Architecture Primer](#architecture-primer)
@@ -39,7 +46,8 @@ You do not need to write code to contribute. Here are all the ways you can help:
 | ✅ **Tests** | Add unit tests for edge cases not currently covered. |
 | 🔧 **Code** | Implement a feature from the roadmap or fix a confirmed bug. |
 | 🔒 **Security audit** | Review the parsing layer for memory-safety issues. |
-| 🌍 **Translations** | Translate docs or error messages for non-English users. |
+| 🌍 **Binding improvement** | Add a feature to an existing Node.js, Python, PHP, or Go binding. |
+| 🧪 **Testbed** | Improve or extend the cross-platform interactive testbed. |
 
 ---
 
@@ -73,8 +81,10 @@ git remote add upstream https://github.com/Twarimitswe-Aaron/gatekeeper-cdr.git
 
 ### 2. Verify toolchain
 
+Gatekeeper uses **Rust Edition 2024**, which requires Rust 1.85 or later.
+
 ```bash
-rustc --version    # Should be 1.85.0 or later (Edition 2024 requirement)
+rustc --version    # Must be 1.85.0 or later
 cargo --version
 cargo clippy --version
 ```
@@ -84,15 +94,74 @@ If your toolchain is older:
 rustup update stable
 ```
 
-### 3. Confirm the baseline passes
+### 3. Enable the Git hooks
+
+The repository ships a `pre-push` hook that runs the core test suite before every push. Enable it once after cloning:
 
 ```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push
+```
+
+This ensures you never accidentally push code that breaks `cargo test -p gatekeeper`.
+
+### 4. Confirm the baseline passes
+
+```bash
+cd core
 cargo test
 cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
 All three must pass before you start making changes, and again before you open a PR.
+
+---
+
+## Project Structure
+
+```
+gatekeeper-cdr/
+│
+├── core/                        # ← The Rust CDR engine (source of truth)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs               # Public API + format sniffer + unit tests
+│       ├── errors.rs            # CdrError — zero-alloc typed errors
+│       ├── ffi.rs               # C FFI exports (gatekeeper_disarm, gatekeeper_sniff_format)
+│       ├── sniffer.rs           # Format detection + disarm() dispatcher
+│       ├── stream.rs            # Sync ImageStream wrapper
+│       ├── async_stream.rs      # Async Tokio streaming wrapper
+│       └── sanitizers/
+│           ├── mod.rs
+│           ├── jpeg.rs          # JPEG typestate pipeline (reference implementation)
+│           ├── png.rs           # PNG typestate pipeline
+│           ├── gif.rs           # GIF typestate pipeline
+│           ├── webp.rs          # WebP typestate pipeline
+│           ├── office.rs        # Office/ZIP sanitizer
+│           └── pdf.rs           # PDF sanitizer
+│
+├── bindings/
+│   ├── node/                    # napi-rs → npm package (gatekeeper-cdr)
+│   ├── python/                  # PyO3 → PyPI package (gatekeeper-cdr)
+│   ├── php/                     # FFI → Packagist (twarimitswe-aaron/gatekeeper-cdr)
+│   ├── go/                      # CGo → Go module (bindings/go)
+│   └── java/                    # JNI → Maven (pending Central publish)
+│
+├── test-gatekeeper-cdr/         # ← Cross-platform interactive testbed
+│   ├── frontend/                # SvelteKit UI
+│   ├── backend-node/            # Express server on port 3001
+│   ├── backend-go/              # Go server on port 3002
+│   ├── backend-java/            # Spring Boot server on port 3003 (disabled)
+│   ├── backend-php/             # PHP built-in server on port 3004
+│   └── backend-python/          # FastAPI server on port 3005
+│
+├── composer.json                # PHP package manifest (published to Packagist)
+├── CONTRIBUTING.md              # This file
+└── README.md                    # Project overview
+```
+
+The **engine lives in `core/`**. The bindings in `bindings/` are thin wrappers that call into the compiled core. The testbed in `test-gatekeeper-cdr/` is for integration-level testing across all language runtimes.
 
 ---
 
@@ -106,12 +175,13 @@ All three must pass before you start making changes, and again before you open a
 | `docs/*` | Documentation-only changes |
 | `refactor/*` | Internal restructuring with no behaviour change |
 | `test/*` | Adding or improving tests only |
+| `binding/*` | Changes scoped to a specific language binding |
 
 **Always branch off `main`:**
 ```bash
 git checkout main
 git pull upstream main
-git checkout -b feat/png-sanitizer
+git checkout -b feat/gif-sanitizer
 ```
 
 ---
@@ -129,16 +199,18 @@ Every code change must be accompanied by tests. See [Testing Requirements](#test
 ### Step 3 — Run the full check suite locally
 
 ```bash
+cd core
+
 # 1. All tests must pass
 cargo test
 
-# 2. No Clippy warnings (warnings are treated as errors in CI)
+# 2. No Clippy warnings (treated as errors in CI)
 cargo clippy -- -D warnings
 
 # 3. Code must be formatted
 cargo fmt
 
-# 4. Check that docs compile
+# 4. Docs must compile
 cargo doc --no-deps
 ```
 
@@ -148,10 +220,12 @@ Follow the [Commit Message Format](#commit-message-format) below.
 
 ```bash
 git add .
-git commit -m "feat(jpeg): add DCT coefficient validation before decode"
+git commit -m "[+]: implement GIF transparency preservation in sanitizer"
 ```
 
 ### Step 5 — Push your branch
+
+The pre-push hook will run `cargo test -p gatekeeper` automatically before the push completes.
 
 ```bash
 git push origin feat/your-branch-name
@@ -202,11 +276,12 @@ git push origin feat/your-branch-name
 
 If you are implementing a new format sanitizer:
 
-- [ ] Add detection to `sniff_format()` in `src/lib.rs`
-- [ ] Add a `FormatMissing*` error variant to `CdrError` for structural validation failures
-- [ ] Create `src/sanitizers/<format>.rs` with the full typestate pipeline
-- [ ] Register the module in `src/sanitizers/mod.rs`
-- [ ] Add a dispatch arm in `disarm()` in `src/lib.rs`
+- [ ] Add detection to `sniff_format()` in `core/src/sniffer.rs`
+- [ ] Add a `FormatMissing*` error variant to `CdrError` in `core/src/errors.rs`
+- [ ] Create `core/src/sanitizers/<format>.rs` with the full typestate pipeline
+- [ ] Register the module in `core/src/sanitizers/mod.rs`
+- [ ] Add a dispatch arm in `disarm()` in `core/src/sniffer.rs`
+- [ ] Expose the new sanitize function from `core/src/lib.rs`
 - [ ] Write at minimum: one decode test, one re-encode test, one malformed-input test
 - [ ] Update the format support table in `README.md`
 
@@ -225,47 +300,141 @@ Every PR that changes behaviour must include tests. The bar is:
 | Refactor | All existing tests must still pass; no new tests required if behaviour is unchanged |
 
 Tests live in:
-- **Unit tests** — `#[cfg(test)] mod tests` inside the relevant source file
-- **Integration tests** — `tests/` directory (for end-to-end `disarm()` calls with real files)
-- **Doc-tests** — inline in `///` doc comments using `\`\`\`rust` blocks
+- **Unit tests** — `#[cfg(test)] mod tests` inside the relevant source file in `core/src/`
+- **Integration tests** — `core/tests/` directory (for end-to-end `disarm()` calls with real files)
+- **Doc-tests** — inline in `///` doc comments using ` ```rust ` blocks
 
 ---
 
 ## Commit Message Format
 
-Use [Conventional Commits](https://www.conventionalcommits.org/):
+Commits use a symbolic prefix format:
 
 ```
-<type>(<scope>): <short description>
-
-[optional body — explain WHY, not WHAT]
-
-[optional footer — Closes #issue, Breaking-Change: ...]
+[<symbol>]: <short description in lowercase>
 ```
 
-**Types:**
+**Symbols:**
 
-| Type | When to use |
-|------|-------------|
-| `feat` | New feature or format support |
-| `fix` | Bug fix |
-| `docs` | Documentation only |
-| `test` | Adding or fixing tests |
-| `refactor` | Code change with no behaviour change |
-| `perf` | Performance improvement |
-| `chore` | Dependency bumps, CI config, tooling |
-| `security` | Security-relevant fix |
-
-**Scopes:** `jpeg`, `png`, `gif`, `sniffer`, `errors`, `ffi`, `deps`, `ci`, `docs`
+| Symbol | Meaning |
+|--------|---------|
+| `[+]` | New feature, new file, new functionality |
+| `[~]` | Modification, update, improvement to existing code |
+| `[-]` | Deletion, removal of code or a file |
+| `[x]` | Bug fix |
+| `[docs]` | Documentation-only change |
+| `[test]` | Adding or fixing tests |
+| `[chore]` | Dependency bumps, CI config, tooling, formatting |
 
 **Examples:**
+
 ```
-feat(png): implement PNG decode + re-encode sanitizer pipeline
-fix(sniffer): correct IHDR chunk type offset from 8 to 12
-docs(readme): add FFI bindings section and roadmap
-test(jpeg): add malformed EOI rejection test
-security(jpeg): reject payloads with truncated SOS segment
+[+]: implement GIF transparency preservation in sanitizer
+[~]: update Node.js binding to expose dual-output pngBuffer field
+[x]: fix out-of-bounds slice in PNG IHDR validation
+[-]: remove unused FilterType import from png.rs
+[docs]: update README FFI examples to reflect dual-output ABI
+[test]: add concurrent async CDR round-trip test
+[chore]: bump png crate to 0.17.15
 ```
+
+Keep the subject line short (≤72 characters). Use the body for explaining *why*, not *what*.
+
+---
+
+## Working on a Specific Binding
+
+Each language binding in `bindings/` is a thin FFI wrapper that calls into the pre-built `libgatekeeper.so` / `libgatekeeper.a`. Before working on a binding, rebuild the native library:
+
+```bash
+cd core
+cargo build --release
+```
+
+Then copy the output to the binding's expected location:
+
+```bash
+# For PHP and Java (shared library)
+cp core/target/release/libgatekeeper.so bindings/php/lib/linux/libgatekeeper.so
+cp core/target/release/libgatekeeper.so bindings/java/src/main/resources/native/linux/libgatekeeper_java.so
+
+# For Go (static library)
+cp core/target/release/libgatekeeper.a bindings/go/lib/linux/libgatekeeper.a
+```
+
+Node.js and Python bindings are built with their own Rust compilation step via `napi-rs` / `maturin`:
+
+```bash
+# Node.js
+cd bindings/node
+npm run build            # Compiles and links against core
+
+# Python
+cd bindings/python
+pip install maturin
+maturin develop          # Builds and installs a local dev wheel
+```
+
+### Testing a binding locally
+
+Each binding has its own test suite:
+
+```bash
+# Node.js
+cd bindings/node && npm test
+
+# Python
+cd bindings/python && pytest
+
+# Go
+cd bindings/go && go test ./...
+
+# PHP
+cd bindings/php && php vendor/bin/phpunit tests/
+
+# Java
+cd bindings/java && mvn test -DskipTests=false
+```
+
+---
+
+## Using the Cross-Platform Testbed
+
+The `test-gatekeeper-cdr/` directory contains a full interactive testbed that runs all active language backends simultaneously and displays results in a SvelteKit UI. This is the fastest way to validate that a change to the core engine produces correct, consistent output across all language bindings.
+
+### Starting the testbed
+
+**1. Start the backends** (each in a separate terminal):
+
+```bash
+# Node.js backend — port 3001
+cd test-gatekeeper-cdr/backend-node && npm install && node server.js
+
+# Go backend — port 3002
+cd test-gatekeeper-cdr/backend-go && go build -o gatekeeper-go-backend . && ./gatekeeper-go-backend
+
+# PHP backend — port 3004
+cd test-gatekeeper-cdr/backend-php && php composer.phar install && php -S localhost:3004 index.php
+
+# Python backend — port 3005
+cd test-gatekeeper-cdr/backend-python && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && python main.py
+```
+
+**2. Start the frontend:**
+
+```bash
+cd test-gatekeeper-cdr/frontend && npm install && npm run dev
+```
+
+**3. Open** `http://localhost:3000` in your browser.
+
+### What to look for
+
+- Upload a JPEG → all backends should return the same native file size (within 1–2 bytes) and the same PNG companion size
+- Upload a PNG → all backends should return the same sanitized PNG size
+- The UI shows **NATIVE** and **ZERO-TRUST PNG** columns side-by-side for every backend so you can spot any discrepancy immediately
+
+If you see different output sizes across backends for the same input file, it means one or more backends are running a stale native library. Rebuild and restart the affected backend.
 
 ---
 
@@ -298,19 +467,22 @@ security(jpeg): reject payloads with truncated SOS segment
 
 If you are new to the codebase, read these files in order:
 
-1. [`src/errors.rs`](src/errors.rs) — understand the error taxonomy first
-2. [`src/lib.rs`](src/lib.rs) — the public API surface and format sniffer
-3. [`src/sanitizers/jpeg.rs`](src/sanitizers/jpeg.rs) — the reference typestate pipeline implementation
+1. [`core/src/errors.rs`](core/src/errors.rs) — understand the error taxonomy first
+2. [`core/src/sniffer.rs`](core/src/sniffer.rs) — the format detector and `disarm()` dispatcher
+3. [`core/src/lib.rs`](core/src/lib.rs) — the public API surface and unit tests
+4. [`core/src/sanitizers/jpeg.rs`](core/src/sanitizers/jpeg.rs) — the reference typestate pipeline implementation
+5. [`core/src/ffi.rs`](core/src/ffi.rs) — the C FFI layer used by Go, PHP, and Java bindings
 
 The key architectural invariants to preserve in all contributions:
 
 | Invariant | Location enforced |
 |---|---|
-| No heap allocation in `sniff_format()` | `src/lib.rs` |
-| No `String` in any `CdrError` variant | `src/errors.rs` |
+| No heap allocation in `sniff_format()` | `core/src/sniffer.rs` |
+| No `String` in any `CdrError` variant | `core/src/errors.rs` |
 | Typestate transitions must be consuming (`self`) | All sanitizer modules |
 | Output shares zero bytes with input | All `reconstruct()` implementations |
-| No `unsafe` blocks | Entire codebase |
+| No `unsafe` blocks in core | `core/src/` (except `ffi.rs` boundary layer) |
+| Pre-push tests always run | `.githooks/pre-push` |
 
 ---
 
