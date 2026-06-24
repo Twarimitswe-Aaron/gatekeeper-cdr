@@ -455,9 +455,14 @@ const raw = fs.readFileSync('suspicious.jpg');
 const format = sniffFormat(raw);   // Returns 'Jpeg' | 'Png'
 console.log('Detected:', format);
 
-// --- Sanitize (returns a Buffer containing a clean PNG) ---
-const clean = disarm(raw);
-fs.writeFileSync('clean.png', clean);
+// --- Sanitize (Dual-Output ABI returns both Native and PNG formats) ---
+const result = disarm(raw);
+fs.writeFileSync(`clean.${result.outputFormat.toLowerCase()}`, result.buffer);
+
+if (result.pngBuffer) {
+    fs.writeFileSync('clean_zerotrust.png', result.pngBuffer);
+}
+console.log(`Sanitized: ${result.originalSizeBytes} bytes -> ${result.finalSizeBytes} bytes`);
 
 // --- ES Module import (planned) ---
 // import { disarm, sniffFormat } from 'gatekeeper-cdr';
@@ -484,11 +489,17 @@ with open("suspicious.jpg", "rb") as f:
 fmt: str = gatekeeper_cdr.sniff_format(raw)   # Returns 'Jpeg' or 'Png'
 print(f"Detected: {fmt}")
 
-# --- Sanitize (returns bytes containing a clean PNG) ---
-clean: bytes = gatekeeper_cdr.disarm(raw)
+# --- Sanitize (Dual-Output ABI returns both Native and PNG formats) ---
+result = gatekeeper_cdr.disarm(raw)
 
-with open("clean.png", "wb") as f:
-    f.write(clean)
+with open(f"clean.{result.output_format.lower()}", "wb") as f:
+    f.write(result.buffer)
+
+if result.png_buffer:
+    with open("clean_zerotrust.png", "wb") as f:
+        f.write(result.png_buffer)
+
+print(f"Sanitized: {result.original_size_bytes} bytes -> {result.final_size_bytes} bytes")
 
 # --- Async variant (planned for Phase 10) ---
 # clean = await gatekeeper_cdr.disarm_async(raw)
@@ -517,10 +528,16 @@ $raw = file_get_contents('suspicious.jpg');
 $format = gatekeeper_sniff_format($raw);  // Returns "Jpeg" or "Png"
 echo "Detected: $format\n";
 
-// --- Sanitize (returns a string of raw PNG bytes) ---
-$clean = gatekeeper_disarm($raw);
+// --- Sanitize (Dual-Output ABI returns both Native and PNG formats) ---
+$result = gatekeeper_disarm($raw);
 
-file_put_contents('clean.png', $clean);
+file_put_contents('clean.' . strtolower($result['output_format']), $result['buffer']);
+
+if (!empty($result['png_buffer'])) {
+    file_put_contents('clean_zerotrust.png', $result['png_buffer']);
+}
+
+echo "Sanitized: {$result['original_size_bytes']} bytes -> {$result['final_size_bytes']} bytes\n";
 ?>
 ```
 
@@ -554,9 +571,15 @@ int main(void) {
     CdrResult result = gatekeeper_disarm(raw, len);
 
     if (result.ok) {
-        FILE *out = fopen("clean.png", "wb");
+        FILE *out = fopen("clean.native", "wb");
         fwrite(result.data, 1, result.len, out);
         fclose(out);
+        
+        if (result.png_len > 0 && result.png_data != NULL) {
+            FILE *png_out = fopen("clean_zerotrust.png", "wb");
+            fwrite(result.png_data, 1, result.png_len, png_out);
+            fclose(png_out);
+        }
     } else {
         fprintf(stderr, "CDR error code: %d\n", result.error_code);
     }
@@ -600,13 +623,19 @@ func main() {
     }
     fmt.Println("Detected:", fmt) // "Jpeg" or "Png"
 
-    // Sanitize — returns []byte containing a clean PNG
-    clean, err := gatekeeper.Disarm(raw)
+    // Sanitize (Dual-Output ABI returns both Native and PNG formats)
+    result, err := gatekeeper.Disarm(raw)
     if err != nil {
         panic(err)
     }
 
-    os.WriteFile("clean.png", clean, 0644)
+    os.WriteFile("clean.native", result.Buffer, 0644)
+    
+    if len(result.PngBuffer) > 0 {
+        os.WriteFile("clean_zerotrust.png", result.PngBuffer, 0644)
+    }
+    
+    fmt.Printf("Sanitized: %s\n", result.OutputFormat)
 }
 ```
 
@@ -647,10 +676,13 @@ public class Main {
         FileFormat fmt = GatekeeperCdr.sniffFormat(raw);
         System.out.println("Detected: " + fmt); // JPEG or PNG
 
-        // Sanitize — returns byte[] containing a clean PNG
-        byte[] clean = GatekeeperCdr.disarm(raw);
-
-        Files.write(Path.of("clean.png"), clean);
+        // Sanitize (Dual-Output ABI returns both Native and PNG formats)
+        // DisarmResult result = GatekeeperCdr.disarm(raw);
+        // Files.write(Path.of("clean." + result.getOutputFormat().toLowerCase()), result.getBuffer());
+        //
+        // if (result.getPngBuffer() != null) {
+        //     Files.write(Path.of("clean_zerotrust.png"), result.getPngBuffer());
+        // }
     }
 }
 ```
