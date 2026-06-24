@@ -570,18 +570,19 @@ impl JpegPipeline<DisarmedMatrix> {
     /// was hidden in the original DCT coefficient LSBs.
     pub fn reconstruct(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
         let DisarmedMatrix(matrix) = self.stage;
-        let PixelMatrix { pixels, width, height } = matrix;
+        let PixelMatrix {
+            pixels,
+            width,
+            height,
+        } = matrix;
 
         let mut output: Vec<u8> = Vec::new();
         JpegEncoder::new(&mut output, 90)
             .encode(&pixels, width as u16, height as u16, JpegColorType::Rgb)
-            .map_err(|e| CdrError::PngEncodeFailed {
-                source: png::EncodingError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                )),
-            })?;
-        Ok(JpegPipeline { stage: PristineStream(output) })
+            .map_err(|e| CdrError::JpegEncodeFailed { source: e })?;
+        Ok(JpegPipeline {
+            stage: PristineStream(output),
+        })
     }
 
     /// Re-encodes the pixel matrix as a lossless PNG.
@@ -589,19 +590,32 @@ impl JpegPipeline<DisarmedMatrix> {
     /// guaranteed zero-trust output.
     pub fn reconstruct_as_png(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
         let DisarmedMatrix(matrix) = self.stage;
-        let PixelMatrix { pixels, width, height } = matrix;
+        let PixelMatrix {
+            pixels,
+            width,
+            height,
+        } = matrix;
 
-        let cap = (width as usize).saturating_mul(height as usize).saturating_mul(3).saturating_add(1024);
+        let cap = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(3)
+            .saturating_add(1024);
         let mut output: Vec<u8> = Vec::with_capacity(cap);
         {
             let mut enc = PngEncoder::new(&mut output, width, height);
             enc.set_color(PngColorType::Rgb);
             enc.set_depth(BitDepth::Eight);
             enc.set_compression(Compression::Best);
-            let mut writer = enc.write_header().map_err(|e| CdrError::PngEncodeFailed { source: e })?;
-            writer.write_image_data(&pixels).map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+            let mut writer = enc
+                .write_header()
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+            writer
+                .write_image_data(&pixels)
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
         }
-        Ok(JpegPipeline { stage: PristineStream(output) })
+        Ok(JpegPipeline {
+            stage: PristineStream(output),
+        })
     }
 }
 

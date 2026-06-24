@@ -14,7 +14,10 @@ impl<'a> RawPdfPayload<'a> {
     /// Performs length and magic byte validation (`%PDF-`).
     pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
         if input.len() > MAX_COMPRESSED_BYTES {
-            return Err(CdrError::PayloadTooLarge { got: input.len(), limit: MAX_COMPRESSED_BYTES });
+            return Err(CdrError::PayloadTooLarge {
+                got: input.len(),
+                limit: MAX_COMPRESSED_BYTES,
+            });
         }
         if input.len() < MIN_PDF_LEN {
             return Err(CdrError::PayloadTooShort { got: input.len() });
@@ -30,7 +33,10 @@ impl<'a> RawPdfPayload<'a> {
     /// Executes the full 3-stage typestate pipeline, consuming the raw payload and yielding a sanitized stream.
     pub fn sanitize(self) -> Result<SanitizedOutput, CdrError> {
         let RawPdfPayload(bytes) = self;
-        Ok(PdfPipeline::new(bytes).decode()?.reconstruct()?.into_sanitized())
+        Ok(PdfPipeline::new(bytes)
+            .decode()?
+            .reconstruct()?
+            .into_sanitized())
     }
 }
 
@@ -50,7 +56,9 @@ impl<'a> PdfPipeline<RawPdfPayload<'a>> {
     /// Initiates a new pipeline from a raw, structurally validated PDF payload.
     #[must_use]
     pub fn new(input: &'a [u8]) -> Self {
-        Self { stage: RawPdfPayload(input) }
+        Self {
+            stage: RawPdfPayload(input),
+        }
     }
 
     /// Decodes the PDF document tree using `lopdf`.
@@ -58,7 +66,8 @@ impl<'a> PdfPipeline<RawPdfPayload<'a>> {
     /// known to harbor execution payloads or embedded files.
     pub fn decode(self) -> Result<PdfPipeline<DisarmedPdfTree>, CdrError> {
         let RawPdfPayload(bytes) = self.stage;
-        let mut doc = Document::load_mem(bytes).map_err(|e| CdrError::PdfDecodeFailed { source: e })?;
+        let mut doc =
+            Document::load_mem(bytes).map_err(|e| CdrError::PdfDecodeFailed { source: e })?;
 
         // ── ZERO-TRUST PDF SANITIZATION ──
         // Iterate through all objects in the document
@@ -89,9 +98,12 @@ impl PdfPipeline<DisarmedPdfTree> {
         let DisarmedPdfTree(mut doc) = self.stage;
 
         let mut out_buffer = Vec::new();
-        doc.save_to(&mut out_buffer).map_err(|e| CdrError::PdfEncodeFailed { source: e })?;
+        doc.save_to(&mut out_buffer)
+            .map_err(|e| CdrError::PdfEncodeFailed { source: e })?;
 
-        Ok(PdfPipeline { stage: PristinePdfStream(out_buffer) })
+        Ok(PdfPipeline {
+            stage: PristinePdfStream(out_buffer),
+        })
     }
 }
 

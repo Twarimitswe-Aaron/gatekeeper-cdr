@@ -48,12 +48,12 @@
 //! std::fs::write("clean.png", clean.buffer).unwrap();
 //! ```
 
+pub mod async_stream;
 pub mod errors;
 pub mod ffi;
 pub mod sanitizers;
 pub mod sniffer;
 pub mod stream;
-pub mod async_stream;
 
 // ── Public API facade ────────────────────────────────────────────────────────
 // All items below are re-exported at the crate root so downstream consumers
@@ -433,9 +433,9 @@ mod tests {
 // ───────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod async_tests {
-    use crate::errors::CdrError;
     use crate::async_stream::{AsyncImageStream, disarm_bytes_async};
-    use crate::sniffer::{JPEG_EOI, PNG_SIG, PNG_IHDR};
+    use crate::errors::CdrError;
+    use crate::sniffer::{JPEG_EOI, PNG_IHDR, PNG_SIG};
     use std::io::Cursor;
 
     // ── Shared fixture helpers ────────────────────────────────────────────────
@@ -452,7 +452,7 @@ mod async_tests {
         let mut v = Vec::new();
         v.extend_from_slice(&PNG_SIG);
         v.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR length
-        v.extend_from_slice(&PNG_IHDR);                  // "IHDR"
+        v.extend_from_slice(&PNG_IHDR); // "IHDR"
         v
     }
 
@@ -497,23 +497,29 @@ mod async_tests {
     #[tokio::test]
     async fn rejects_empty_payload() {
         let err = disarm_bytes_async(&[]).await.unwrap_err();
-        assert!(matches!(err, CdrError::PayloadTooShort { got: 0 }),
-            "got {err:?}");
+        assert!(
+            matches!(err, CdrError::PayloadTooShort { got: 0 }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn rejects_one_byte_payload() {
         let err = disarm_bytes_async(&[0xFF]).await.unwrap_err();
-        assert!(matches!(err, CdrError::PayloadTooShort { got: 1 }),
-            "got {err:?}");
+        assert!(
+            matches!(err, CdrError::PayloadTooShort { got: 1 }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn rejects_15_bytes_exactly_below_min_sniff_len() {
         let data = vec![0xFFu8; 15];
         let err = disarm_bytes_async(&data).await.unwrap_err();
-        assert!(matches!(err, CdrError::PayloadTooShort { got: 15 }),
-            "got {err:?}");
+        assert!(
+            matches!(err, CdrError::PayloadTooShort { got: 15 }),
+            "got {err:?}"
+        );
     }
 
     // ── 2. UnknownFormat ───────────────────────────────────────────────
@@ -522,26 +528,27 @@ mod async_tests {
     async fn rejects_all_zeros() {
         let data = vec![0u8; 32];
         let err = disarm_bytes_async(&data).await.unwrap_err();
-        assert!(matches!(err, CdrError::UnknownFormat { .. }),
-            "got {err:?}");
+        assert!(matches!(err, CdrError::UnknownFormat { .. }), "got {err:?}");
     }
 
     #[tokio::test]
     async fn rejects_all_ones() {
         let data = vec![0xFFu8; 32];
         let err = disarm_bytes_async(&data).await.unwrap_err();
-        assert!(matches!(err, CdrError::UnknownFormat { .. }),
-            "got {err:?}");
+        assert!(matches!(err, CdrError::UnknownFormat { .. }), "got {err:?}");
     }
 
     #[tokio::test]
     async fn rejects_random_garbage() {
-        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-                        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let data = vec![
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+            0x06, 0x07,
+        ];
         let err = disarm_bytes_async(&data).await.unwrap_err();
         match err {
-            CdrError::UnknownFormat { magic } =>
-                assert_eq!(magic, [0xDE, 0xAD, 0xBE, 0xEF], "wrong magic bytes"),
+            CdrError::UnknownFormat { magic } => {
+                assert_eq!(magic, [0xDE, 0xAD, 0xBE, 0xEF], "wrong magic bytes")
+            }
             other => panic!("expected UnknownFormat, got {other:?}"),
         }
     }
@@ -554,8 +561,10 @@ mod async_tests {
     #[tokio::test]
     async fn routes_jpeg_not_unknown() {
         let err = disarm_bytes_async(&minimal_jpeg()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "JPEG should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "JPEG should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -564,15 +573,19 @@ mod async_tests {
         let mut data = vec![0xFF, 0xD8];
         data.extend_from_slice(&[0x00; 14]); // no EOI
         let err = disarm_bytes_async(&data).await.unwrap_err();
-        assert!(matches!(err, CdrError::JpegMissingEoi),
-            "expected JpegMissingEoi, got {err:?}");
+        assert!(
+            matches!(err, CdrError::JpegMissingEoi),
+            "expected JpegMissingEoi, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_png_not_unknown() {
         let err = disarm_bytes_async(&minimal_png_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "PNG should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "PNG should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -581,43 +594,55 @@ mod async_tests {
         let mut data = PNG_SIG.to_vec();
         data.extend_from_slice(&[0x00; 8]); // garbage where IHDR should be
         let err = disarm_bytes_async(&data).await.unwrap_err();
-        assert!(matches!(err, CdrError::PngMissingIhdr),
-            "expected PngMissingIhdr, got {err:?}");
+        assert!(
+            matches!(err, CdrError::PngMissingIhdr),
+            "expected PngMissingIhdr, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_gif87a_not_unknown() {
         let err = disarm_bytes_async(&gif87a_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "GIF87a should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "GIF87a should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_gif89a_not_unknown() {
         let err = disarm_bytes_async(&gif89a_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "GIF89a should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "GIF89a should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_webp_not_unknown() {
         let err = disarm_bytes_async(&webp_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "WebP should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "WebP should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_pdf_not_unknown() {
         let err = disarm_bytes_async(&pdf_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "PDF should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "PDF should not be UnknownFormat, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn routes_zip_office_not_unknown() {
         let err = disarm_bytes_async(&zip_stub()).await.unwrap_err();
-        assert!(!matches!(err, CdrError::UnknownFormat { .. }),
-            "ZIP/Office should not be UnknownFormat, got {err:?}");
+        assert!(
+            !matches!(err, CdrError::UnknownFormat { .. }),
+            "ZIP/Office should not be UnknownFormat, got {err:?}"
+        );
     }
 
     // ── 4. End-to-end success (real CDR round-trip) ──────────────────────
@@ -635,11 +660,14 @@ mod async_tests {
             let mut writer = enc.write_header().expect("header");
             writer.write_image_data(&[255u8, 0, 0]).expect("pixels");
         }
-        let result = disarm_bytes_async(&raw).await
+        let result = disarm_bytes_async(&raw)
+            .await
             .expect("1x1 PNG round-trip must succeed");
         // Output must start with PNG signature
-        assert!(result.buffer.starts_with(&PNG_SIG),
-            "output buffer must be valid PNG");
+        assert!(
+            result.buffer.starts_with(&PNG_SIG),
+            "output buffer must be valid PNG"
+        );
         assert!(!result.buffer.is_empty());
     }
 
@@ -652,9 +680,11 @@ mod async_tests {
         let data = vec![0u8; 32]; // garbage — will be UnknownFormat
         let cursor = Cursor::new(data);
         let reader = tokio::io::BufReader::new(cursor);
-        let err = AsyncImageStream::new(reader).route_async().await.unwrap_err();
-        assert!(matches!(err, CdrError::UnknownFormat { .. }),
-            "got {err:?}");
+        let err = AsyncImageStream::new(reader)
+            .route_async()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CdrError::UnknownFormat { .. }), "got {err:?}");
     }
 
     // ── 6. Concurrency: 100 simultaneous async calls ─────────────────────
@@ -666,14 +696,14 @@ mod async_tests {
         use tokio::task::JoinSet;
         let mut set = JoinSet::new();
         for _ in 0..100 {
-            set.spawn(async {
-                disarm_bytes_async(&[0u8; 32]).await
-            });
+            set.spawn(async { disarm_bytes_async(&[0u8; 32]).await });
         }
         while let Some(result) = set.join_next().await {
             let inner = result.expect("task did not panic");
-            assert!(matches!(inner, Err(CdrError::UnknownFormat { .. })),
-                "expected UnknownFormat from garbage, got {inner:?}");
+            assert!(
+                matches!(inner, Err(CdrError::UnknownFormat { .. })),
+                "expected UnknownFormat from garbage, got {inner:?}"
+            );
         }
     }
 
@@ -686,7 +716,7 @@ mod async_tests {
         for i in 0..100u8 {
             let payload = if i % 2 == 0 {
                 // garbage — UnknownFormat
-                vec![0xDE, 0xAD, 0xBE, 0xEF, 0,0,0,0,0,0,0,0,0,0,0,0]
+                vec![0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             } else {
                 // PNG stub — routed to PNG pipeline (will fail at decode)
                 let mut v = PNG_SIG.to_vec();
@@ -694,13 +724,11 @@ mod async_tests {
                 v.extend_from_slice(&PNG_IHDR);
                 v
             };
-            set.spawn(async move {
-                disarm_bytes_async(&payload).await
-            });
+            set.spawn(async move { disarm_bytes_async(&payload).await });
         }
         let mut count = 0usize;
         while let Some(result) = set.join_next().await {
-            result.expect("task must not panic");
+            let _ = result.expect("task must not panic");
             count += 1;
         }
         assert_eq!(count, 100);
@@ -712,7 +740,6 @@ mod async_tests {
     async fn handles_large_unknown_payload_without_oom() {
         let big = vec![0xAAu8; 1024 * 1024]; // 1 MiB
         let err = disarm_bytes_async(&big).await.unwrap_err();
-        assert!(matches!(err, CdrError::UnknownFormat { .. }),
-            "got {err:?}");
+        assert!(matches!(err, CdrError::UnknownFormat { .. }), "got {err:?}");
     }
 }

@@ -23,14 +23,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
-use crate::sanitizers::jpeg::sanitize_jpeg;
-use crate::sanitizers::png::sanitize_png;
 use crate::sanitizers::gif::sanitize_gif;
-use crate::sanitizers::webp::sanitize_webp;
+use crate::sanitizers::gif::sanitize_gif_to_png;
+use crate::sanitizers::jpeg::sanitize_jpeg;
+use crate::sanitizers::jpeg::sanitize_jpeg_to_png;
 use crate::sanitizers::office::sanitize_office;
 use crate::sanitizers::pdf::sanitize_pdf;
-use crate::sanitizers::jpeg::sanitize_jpeg_to_png;
-use crate::sanitizers::gif::sanitize_gif_to_png;
+use crate::sanitizers::png::sanitize_png;
+use crate::sanitizers::webp::sanitize_webp;
 
 // ── Magic byte constants (stack arrays, zero heap) ───────────────────────────
 //
@@ -266,10 +266,8 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
     }
 
     // ── WebP detection ────────────────────────────────────────────────────
-    if payload[..4] == WEBP_RIFF {
-        if payload.len() >= 12 && payload[8..12] == WEBP_WEBP {
-            return Ok(FileFormat::Webp);
-        }
+    if payload[..4] == WEBP_RIFF && payload.len() >= 12 && payload[8..12] == WEBP_WEBP {
+        return Ok(FileFormat::Webp);
     }
 
     // ── Office (ZIP) detection ────────────────────────────────────────────
@@ -299,8 +297,8 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 /// buffer and detailed telemetry regarding the file sizes and formats.
 #[derive(Debug)]
 pub struct DisarmResult {
-    /// The sanitized file in the **original input format**.
-    /// JPEG in → JPEG out. GIF in → GIF out. Etc.
+    /// The sanitized file in the native safe output format.
+    /// JPEG in → JPEG out. GIF in → GIF out. WebP in → PNG out.
     pub buffer: Vec<u8>,
     /// The sanitized file re-encoded as a **lossless PNG**.
     /// This is the mathematically guaranteed zero-trust version —
@@ -338,38 +336,39 @@ pub fn disarm(payload: &[u8], expected_format: Option<&str>) -> Result<DisarmRes
         }
     }
 
-    let (native_bytes, png_bytes, output_fmt): (Vec<u8>, Option<Vec<u8>>, &'static str) = match format {
-        FileFormat::Jpeg => {
-            // Decode once → JPEG (native, metadata stripped) + PNG (lossless guarantee)
-            let jpeg_out = sanitize_jpeg(payload)?.into_bytes();
-            let png_out  = sanitize_jpeg_to_png(payload)?.into_bytes();
-            (jpeg_out, Some(png_out), "jpeg")
-        }
-        FileFormat::Png => {
-            // buffer IS already a lossless PNG — no second copy needed
-            let png_out = sanitize_png(payload)?.into_bytes();
-            (png_out, None, "png")
-        }
-        FileFormat::Gif => {
-            // GIF (palette-indexed native) + PNG (lossless RGBA guarantee)
-            let gif_out = sanitize_gif(payload)?.into_bytes();
-            let png_out = sanitize_gif_to_png(payload)?.into_bytes();
-            (gif_out, Some(png_out), "gif")
-        }
-        FileFormat::Webp => {
-            // No stable pure-Rust WebP encoder; buffer IS the PNG — no second copy
-            let png_out = sanitize_webp(payload)?.into_bytes();
-            (png_out, None, "png")
-        }
-        FileFormat::Office => {
-            let out = sanitize_office(payload)?.into_bytes();
-            (out, None, "office")
-        }
-        FileFormat::Pdf => {
-            let out = sanitize_pdf(payload)?.into_bytes();
-            (out, None, "pdf")
-        }
-    };
+    let (native_bytes, png_bytes, output_fmt): (Vec<u8>, Option<Vec<u8>>, &'static str) =
+        match format {
+            FileFormat::Jpeg => {
+                // Decode once → JPEG (native, metadata stripped) + PNG (lossless guarantee)
+                let jpeg_out = sanitize_jpeg(payload)?.into_bytes();
+                let png_out = sanitize_jpeg_to_png(payload)?.into_bytes();
+                (jpeg_out, Some(png_out), "jpeg")
+            }
+            FileFormat::Png => {
+                // buffer IS already a lossless PNG — no second copy needed
+                let png_out = sanitize_png(payload)?.into_bytes();
+                (png_out, None, "png")
+            }
+            FileFormat::Gif => {
+                // GIF (palette-indexed native) + PNG (lossless RGBA guarantee)
+                let gif_out = sanitize_gif(payload)?.into_bytes();
+                let png_out = sanitize_gif_to_png(payload)?.into_bytes();
+                (gif_out, Some(png_out), "gif")
+            }
+            FileFormat::Webp => {
+                // No stable pure-Rust WebP encoder; buffer IS the PNG — no second copy
+                let png_out = sanitize_webp(payload)?.into_bytes();
+                (png_out, None, "png")
+            }
+            FileFormat::Office => {
+                let out = sanitize_office(payload)?.into_bytes();
+                (out, None, "office")
+            }
+            FileFormat::Pdf => {
+                let out = sanitize_pdf(payload)?.into_bytes();
+                (out, None, "pdf")
+            }
+        };
 
     Ok(DisarmResult {
         final_size_bytes: native_bytes.len(),

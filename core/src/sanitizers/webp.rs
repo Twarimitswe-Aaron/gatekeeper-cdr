@@ -1,7 +1,7 @@
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use png::{BitDepth, ColorType, Compression, Encoder};
 use image_webp::WebPDecoder;
+use png::{BitDepth, ColorType, Compression, Encoder};
 
 const MAX_DIMENSION: u32 = 16_384;
 const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024;
@@ -22,7 +22,10 @@ pub struct RawWebpPayload<'a>(&'a [u8]);
 impl<'a> RawWebpPayload<'a> {
     pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
         if input.len() > MAX_COMPRESSED_BYTES {
-            return Err(CdrError::PayloadTooLarge { got: input.len(), limit: MAX_COMPRESSED_BYTES });
+            return Err(CdrError::PayloadTooLarge {
+                got: input.len(),
+                limit: MAX_COMPRESSED_BYTES,
+            });
         }
         if input.len() < MIN_WEBP_LEN {
             return Err(CdrError::PayloadTooShort { got: input.len() });
@@ -37,7 +40,10 @@ impl<'a> RawWebpPayload<'a> {
 
     pub fn sanitize(self) -> Result<SanitizedOutput, CdrError> {
         let RawWebpPayload(bytes) = self;
-        Ok(WebpPipeline::new(bytes).decode()?.reconstruct()?.into_sanitized())
+        Ok(WebpPipeline::new(bytes)
+            .decode()?
+            .reconstruct()?
+            .into_sanitized())
     }
 }
 
@@ -51,15 +57,17 @@ pub struct WebpPipeline<S> {
 impl<'a> WebpPipeline<RawWebpPayload<'a>> {
     #[must_use]
     pub fn new(input: &'a [u8]) -> Self {
-        Self { stage: RawWebpPayload(input) }
+        Self {
+            stage: RawWebpPayload(input),
+        }
     }
 
     pub fn decode(self) -> Result<WebpPipeline<DisarmedWebpMatrix>, CdrError> {
         let RawWebpPayload(bytes) = self.stage;
         let cursor = std::io::Cursor::new(bytes);
-        
-        let mut decoder = WebPDecoder::new(cursor)
-            .map_err(|e| CdrError::WebpDecodeFailed { source: e })?;
+
+        let mut decoder =
+            WebPDecoder::new(cursor).map_err(|e| CdrError::WebpDecodeFailed { source: e })?;
 
         let (width, height) = decoder.dimensions();
 
@@ -67,7 +75,10 @@ impl<'a> WebpPipeline<RawWebpPayload<'a>> {
             return Err(CdrError::DegenerateDimensions { width, height });
         }
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
-            return Err(CdrError::DimensionTooLarge { dimension: width.max(height), limit: MAX_DIMENSION });
+            return Err(CdrError::DimensionTooLarge {
+                dimension: width.max(height),
+                limit: MAX_DIMENSION,
+            });
         }
 
         // WebP can be lossy (YUV/RGB) or lossless (RGBA).
@@ -85,11 +96,16 @@ impl<'a> WebpPipeline<RawWebpPayload<'a>> {
             .saturating_mul(channels);
 
         if expected > MAX_PIXEL_BYTES {
-            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+            return Err(CdrError::ImageTooLarge {
+                bytes: expected,
+                limit: MAX_PIXEL_BYTES,
+            });
         }
 
         let mut pixels = vec![0u8; expected];
-        decoder.read_image(&mut pixels).map_err(|e| CdrError::WebpDecodeFailed { source: e })?;
+        decoder
+            .read_image(&mut pixels)
+            .map_err(|e| CdrError::WebpDecodeFailed { source: e })?;
 
         Ok(WebpPipeline {
             stage: DisarmedWebpMatrix(WebpPixelMatrix {
@@ -106,14 +122,23 @@ impl<'a> WebpPipeline<RawWebpPayload<'a>> {
 impl WebpPipeline<DisarmedWebpMatrix> {
     pub fn reconstruct(self) -> Result<WebpPipeline<PristinePngStream>, CdrError> {
         let DisarmedWebpMatrix(matrix) = self.stage;
-        let WebpPixelMatrix { pixels, width, height, color_type, bit_depth } = matrix;
+        let WebpPixelMatrix {
+            pixels,
+            width,
+            height,
+            color_type,
+            bit_depth,
+        } = matrix;
 
         let channels = match color_type {
             ColorType::Rgba => 4,
             ColorType::Rgb => 3,
             _ => 4,
         };
-        let cap = (width as usize).saturating_mul(height as usize).saturating_mul(channels).saturating_add(1024);
+        let cap = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(channels)
+            .saturating_add(1024);
         let mut output: Vec<u8> = Vec::with_capacity(cap);
 
         {
@@ -122,11 +147,17 @@ impl WebpPipeline<DisarmedWebpMatrix> {
             encoder.set_depth(bit_depth);
             encoder.set_compression(Compression::Best);
 
-            let mut writer = encoder.write_header().map_err(|e| CdrError::PngEncodeFailed { source: e })?;
-            writer.write_image_data(&pixels).map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+            let mut writer = encoder
+                .write_header()
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+            writer
+                .write_image_data(&pixels)
+                .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
         }
 
-        Ok(WebpPipeline { stage: PristinePngStream(output) })
+        Ok(WebpPipeline {
+            stage: PristinePngStream(output),
+        })
     }
 }
 

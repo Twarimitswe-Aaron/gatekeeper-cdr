@@ -675,7 +675,7 @@ public class Main {
 - [x] **Phase 11** — JNI Java bindings → *pending Maven Central publish*
 - [ ] **Phase 12** — Single-pass JPEG dual-output (`sanitize_jpeg_dual`) to eliminate double-decode
 - [ ] **Phase 13** — `CdrPolicy` struct: configurable size limits, quality, format allowlist
-- [ ] **Phase 14** — Async pipeline via Tokio for streaming large files
+- [x] **Phase 14** — Async pipeline via Tokio for streaming large files
 - [ ] **Phase 15** — WASM target for browser-side CDR
 
 ---

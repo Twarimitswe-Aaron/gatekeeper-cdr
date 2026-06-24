@@ -122,6 +122,10 @@ pub enum CdrError {
     #[error("PNG re-encode failure: {source}")]
     PngEncodeFailed { source: png::EncodingError },
 
+    /// The JPEG encoder returned an error while writing into the output buffer.
+    #[error("JPEG re-encode failure: {source}")]
+    JpegEncodeFailed { source: jpeg_encoder::EncodingError },
+
     /// The GIF encoder returned an error while writing into the output buffer.
     #[error("GIF re-encode failure: {source}")]
     GifEncodeFailed { source: gif::EncodingError },

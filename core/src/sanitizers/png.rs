@@ -470,7 +470,6 @@ impl PngPipeline<DisarmedPngMatrix> {
             encoder.set_depth(bit_depth);
             encoder.set_compression(Compression::Best);
 
-
             let mut writer = encoder
                 .write_header()
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?; // emits PNG sig + IHDR

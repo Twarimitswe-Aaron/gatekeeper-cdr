@@ -1,4 +1,5 @@
-use crate::{disarm, sniff_format, FileFormat};
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+use crate::{FileFormat, disarm, sniff_format};
 use std::slice;
 
 #[repr(C)]
@@ -90,7 +91,7 @@ pub extern "C" fn gatekeeper_sniff_format(
 
             let bytes_to_copy = std::cmp::min(format_str.len(), out_len - 1); // -1 for null terminator
             let out_slice = unsafe { slice::from_raw_parts_mut(out_fmt, out_len) };
-            
+
             out_slice[..bytes_to_copy].copy_from_slice(&format_str[..bytes_to_copy]);
             out_slice[bytes_to_copy] = 0; // null terminator
 

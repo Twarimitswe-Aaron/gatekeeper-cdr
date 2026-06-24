@@ -141,7 +141,9 @@ impl<R: AsyncRead + Unpin> AsyncImageStream<R> {
                 .reader
                 .read(&mut chunk)
                 .await
-                .map_err(|e| CdrError::IoError { message: e.to_string() })?;
+                .map_err(|e| CdrError::IoError {
+                    message: e.to_string(),
+                })?;
 
             if n == 0 {
                 break; // EOF
@@ -164,7 +166,9 @@ impl<R: AsyncRead + Unpin> AsyncImageStream<R> {
         // is never stalled during heavy pixel processing.
         tokio::task::spawn_blocking(move || crate::sniffer::disarm(&payload, None))
             .await
-            .map_err(|e| CdrError::IoError { message: e.to_string() })?
+            .map_err(|e| CdrError::IoError {
+                message: e.to_string(),
+            })?
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use gif::{DecodeOptions, Encoder as GifEncoder, Frame, Repeat};
+use gif::{ColorOutput, DecodeOptions, Encoder as GifEncoder, Frame, Repeat};
 use png::{BitDepth, ColorType as PngColorType, Compression, Encoder as PngEncoder};
 
 const MAX_DIMENSION: u32 = 16_384;
@@ -16,6 +16,8 @@ struct GifPixelMatrix {
     height: u16,
     /// The global colour palette from the decoded GIF, if present.
     palette: Vec<u8>,
+    /// The transparent index from the original frame, if any.
+    transparent: Option<u8>,
 }
 
 pub struct RawGifPayload<'a>(&'a [u8]);
@@ -23,7 +25,10 @@ pub struct RawGifPayload<'a>(&'a [u8]);
 impl<'a> RawGifPayload<'a> {
     pub fn new(input: &'a [u8]) -> Result<Self, CdrError> {
         if input.len() > MAX_COMPRESSED_BYTES {
-            return Err(CdrError::PayloadTooLarge { got: input.len(), limit: MAX_COMPRESSED_BYTES });
+            return Err(CdrError::PayloadTooLarge {
+                got: input.len(),
+                limit: MAX_COMPRESSED_BYTES,
+            });
         }
         if input.len() < MIN_GIF_LEN {
             return Err(CdrError::PayloadTooShort { got: input.len() });
@@ -38,7 +43,10 @@ impl<'a> RawGifPayload<'a> {
 
     pub fn sanitize(self) -> Result<SanitizedOutput, CdrError> {
         let RawGifPayload(bytes) = self;
-        Ok(GifPipeline::new(bytes).decode()?.reconstruct()?.into_sanitized())
+        Ok(GifPipeline::new(bytes)
+            .decode()?
+            .reconstruct()?
+            .into_sanitized())
     }
 }
 
@@ -52,14 +60,18 @@ pub struct GifPipeline<S> {
 impl<'a> GifPipeline<RawGifPayload<'a>> {
     #[must_use]
     pub fn new(input: &'a [u8]) -> Self {
-        Self { stage: RawGifPayload(input) }
+        Self {
+            stage: RawGifPayload(input),
+        }
     }
 
     pub fn decode(self) -> Result<GifPipeline<DisarmedGifMatrix>, CdrError> {
         let RawGifPayload(bytes) = self.stage;
         let cursor = std::io::Cursor::new(bytes);
 
-        let mut decoder = DecodeOptions::new()
+        let mut options = DecodeOptions::new();
+        options.set_color_output(ColorOutput::RGBA);
+        let mut decoder = options
             .read_info(cursor)
             .map_err(|e| CdrError::GifDecodeFailed { source: e })?;
 
@@ -67,7 +79,10 @@ impl<'a> GifPipeline<RawGifPayload<'a>> {
         let height = decoder.height();
 
         if width == 0 || height == 0 {
-            return Err(CdrError::DegenerateDimensions { width: width as u32, height: height as u32 });
+            return Err(CdrError::DegenerateDimensions {
+                width: width as u32,
+                height: height as u32,
+            });
         }
         if width as u32 > MAX_DIMENSION || height as u32 > MAX_DIMENSION {
             return Err(CdrError::DimensionTooLarge {
@@ -76,9 +91,14 @@ impl<'a> GifPipeline<RawGifPayload<'a>> {
             });
         }
 
-        let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
         if expected > MAX_PIXEL_BYTES {
-            return Err(CdrError::ImageTooLarge { bytes: expected, limit: MAX_PIXEL_BYTES });
+            return Err(CdrError::ImageTooLarge {
+                bytes: expected,
+                limit: MAX_PIXEL_BYTES,
+            });
         }
 
         // Capture the global palette before reading frames.
@@ -91,12 +111,23 @@ impl<'a> GifPipeline<RawGifPayload<'a>> {
 
         let mut pixels = vec![0u8; expected];
         if frame.buffer.len() != expected {
-            return Err(CdrError::PixelBufferMismatch { expected, got: frame.buffer.len() });
+            return Err(CdrError::PixelBufferMismatch {
+                expected,
+                got: frame.buffer.len(),
+            });
         }
         pixels.copy_from_slice(&frame.buffer);
 
+        let transparent = frame.transparent;
+
         Ok(GifPipeline {
-            stage: DisarmedGifMatrix(GifPixelMatrix { pixels, width, height, palette }),
+            stage: DisarmedGifMatrix(GifPixelMatrix {
+                pixels,
+                width,
+                height,
+                palette,
+                transparent,
+            }),
         })
     }
 }
@@ -107,7 +138,13 @@ impl GifPipeline<DisarmedGifMatrix> {
     /// and application-extension payloads from the original are discarded.
     pub fn reconstruct(self) -> Result<GifPipeline<PristineGifStream>, CdrError> {
         let DisarmedGifMatrix(matrix) = self.stage;
-        let GifPixelMatrix { pixels, width, height, palette } = matrix;
+        let GifPixelMatrix {
+            pixels,
+            width,
+            height,
+            palette,
+            transparent,
+        } = matrix;
 
         let mut output: Vec<u8> = Vec::new();
 
@@ -126,9 +163,17 @@ impl GifPipeline<DisarmedGifMatrix> {
                 .map_err(|e| CdrError::GifEncodeFailed { source: e })?;
 
             // Convert RGBA pixels to palette-indexed using nearest-colour lookup.
+            let mut transparent_found = false;
             let indexed: Vec<u8> = pixels
                 .chunks(4)
                 .map(|rgba| {
+                    if let Some(t_idx) = transparent {
+                        // If pixel is fully transparent, emit the transparent index.
+                        if rgba[3] < 128 {
+                            transparent_found = true;
+                            return t_idx;
+                        }
+                    }
                     let r = rgba[0] as i32;
                     let g = rgba[1] as i32;
                     let b = rgba[2] as i32;
@@ -145,16 +190,23 @@ impl GifPipeline<DisarmedGifMatrix> {
                 })
                 .collect();
 
-            let mut frame = Frame::default();
-            frame.width = width;
-            frame.height = height;
-            frame.buffer = std::borrow::Cow::Owned(indexed);
+            let mut frame = Frame {
+                width,
+                height,
+                buffer: std::borrow::Cow::Owned(indexed),
+                ..Default::default()
+            };
+            if transparent_found {
+                frame.transparent = transparent;
+            }
             encoder
                 .write_frame(&frame)
                 .map_err(|e| CdrError::GifEncodeFailed { source: e })?;
         }
 
-        Ok(GifPipeline { stage: PristineGifStream(output) })
+        Ok(GifPipeline {
+            stage: PristineGifStream(output),
+        })
     }
 }
 
@@ -178,14 +230,34 @@ pub fn sanitize_gif_to_png(input: &[u8]) -> Result<SanitizedOutput, CdrError> {
     let RawGifPayload(bytes) = RawGifPayload::new(input)?;
     let cursor = std::io::Cursor::new(bytes);
 
-    let mut decoder = DecodeOptions::new()
+    let mut options = DecodeOptions::new();
+    options.set_color_output(ColorOutput::RGBA);
+    let mut decoder = options
         .read_info(cursor)
         .map_err(|e| CdrError::GifDecodeFailed { source: e })?;
 
-    let width  = decoder.width()  as u32;
+    let width = decoder.width() as u32;
     let height = decoder.height() as u32;
 
-    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    if width == 0 || height == 0 {
+        return Err(CdrError::DegenerateDimensions { width, height });
+    }
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(CdrError::DimensionTooLarge {
+            dimension: width.max(height),
+            limit: MAX_DIMENSION,
+        });
+    }
+
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if expected > MAX_PIXEL_BYTES {
+        return Err(CdrError::ImageTooLarge {
+            bytes: expected,
+            limit: MAX_PIXEL_BYTES,
+        });
+    }
 
     let frame = decoder
         .read_next_frame()
@@ -193,7 +265,10 @@ pub fn sanitize_gif_to_png(input: &[u8]) -> Result<SanitizedOutput, CdrError> {
         .ok_or(CdrError::MissingImageInfo)?;
 
     if frame.buffer.len() != expected {
-        return Err(CdrError::PixelBufferMismatch { expected, got: frame.buffer.len() });
+        return Err(CdrError::PixelBufferMismatch {
+            expected,
+            got: frame.buffer.len(),
+        });
     }
 
     let cap = expected.saturating_add(1024);
@@ -203,8 +278,12 @@ pub fn sanitize_gif_to_png(input: &[u8]) -> Result<SanitizedOutput, CdrError> {
         enc.set_color(PngColorType::Rgba);
         enc.set_depth(BitDepth::Eight);
         enc.set_compression(Compression::Best);
-        let mut writer = enc.write_header().map_err(|e| CdrError::PngEncodeFailed { source: e })?;
-        writer.write_image_data(&frame.buffer).map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+        let mut writer = enc
+            .write_header()
+            .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
+        writer
+            .write_image_data(&frame.buffer)
+            .map_err(|e| CdrError::PngEncodeFailed { source: e })?;
     }
 
     Ok(SanitizedOutput::_crate_new(output))
