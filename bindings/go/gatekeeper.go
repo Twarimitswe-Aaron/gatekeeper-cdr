@@ -44,9 +44,15 @@ func SniffFormat(payload []byte) (string, error) {
 	return goStr, nil
 }
 
+type DisarmResult struct {
+	Buffer       []byte
+	PngBuffer    []byte // nil if no png output
+	OutputFormat string
+}
+
 // Disarm sanitizes the input payload by stripping all metadata and potential exploits,
 // reconstructing a safe file from the raw pixel data.
-func Disarm(payload []byte) ([]byte, error) {
+func Disarm(payload []byte) (*DisarmResult, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("payload is empty")
 	}
@@ -65,9 +71,18 @@ func Disarm(payload []byte) ([]byte, error) {
 	}
 
 	// Copy the data from the Rust-managed C pointer into a new Go byte slice.
-	// This is necessary because the Go GC cannot manage the Rust memory,
-	// and gatekeeper_free_result will invalidate the pointer as soon as this function returns.
 	cleanSlice := C.GoBytes(unsafe.Pointer(result.data), C.int(result.len))
 	
-	return cleanSlice, nil
+	var pngSlice []byte
+	if result.png_len > 0 && result.png_data != nil {
+		pngSlice = C.GoBytes(unsafe.Pointer(result.png_data), C.int(result.png_len))
+	}
+
+	outFmt := C.GoString((*C.char)(unsafe.Pointer(&result.output_format[0])))
+
+	return &DisarmResult{
+		Buffer:       cleanSlice,
+		PngBuffer:    pngSlice,
+		OutputFormat: outFmt,
+	}, nil
 }

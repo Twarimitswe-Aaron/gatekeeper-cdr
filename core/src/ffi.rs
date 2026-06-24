@@ -6,6 +6,9 @@ pub struct CdrResult {
     pub ok: bool,
     pub data: *mut u8,
     pub len: usize,
+    pub png_data: *mut u8,
+    pub png_len: usize,
+    pub output_format: [u8; 16], // inline string for format
     pub error_code: i32,
 }
 
@@ -15,19 +18,42 @@ impl CdrResult {
             ok: false,
             data: std::ptr::null_mut(),
             len: 0,
+            png_data: std::ptr::null_mut(),
+            png_len: 0,
+            output_format: [0; 16],
             error_code: code,
         }
     }
 
-    fn success(mut vec: Vec<u8>) -> Self {
+    fn success(mut vec: Vec<u8>, png_opt: Option<Vec<u8>>, format: &str) -> Self {
         vec.shrink_to_fit();
         let len = vec.len();
         let data = vec.as_mut_ptr();
         std::mem::forget(vec);
+
+        let (png_data, png_len) = match png_opt {
+            Some(mut pvec) => {
+                pvec.shrink_to_fit();
+                let plen = pvec.len();
+                let pdata = pvec.as_mut_ptr();
+                std::mem::forget(pvec);
+                (pdata, plen)
+            }
+            None => (std::ptr::null_mut(), 0),
+        };
+
+        let mut output_format = [0u8; 16];
+        let bytes_to_copy = std::cmp::min(format.len(), 15);
+        output_format[..bytes_to_copy].copy_from_slice(&format.as_bytes()[..bytes_to_copy]);
+        output_format[bytes_to_copy] = 0; // null terminator
+
         CdrResult {
             ok: true,
             data,
             len,
+            png_data,
+            png_len,
+            output_format,
             error_code: 0,
         }
     }
@@ -87,7 +113,7 @@ pub extern "C" fn gatekeeper_disarm(raw: *const u8, len: usize) -> CdrResult {
     let payload = unsafe { slice::from_raw_parts(raw, len) };
 
     match disarm(payload, None) {
-        Ok(clean) => CdrResult::success(clean.buffer),
+        Ok(clean) => CdrResult::success(clean.buffer, clean.png_buffer, clean.output_format),
         Err(_) => CdrResult::error(2), // Could map specific errors to distinct codes
     }
 }
@@ -97,10 +123,16 @@ pub extern "C" fn gatekeeper_disarm(raw: *const u8, len: usize) -> CdrResult {
 /// It is safe to call this on an error result (where `data` is null).
 #[unsafe(no_mangle)]
 pub extern "C" fn gatekeeper_free_result(result: CdrResult) {
-    if result.ok && !result.data.is_null() && result.len > 0 {
-        unsafe {
-            // Retake ownership of the vector to drop it properly
-            let _ = Vec::from_raw_parts(result.data, result.len, result.len);
+    if result.ok {
+        if !result.data.is_null() && result.len > 0 {
+            unsafe {
+                let _ = Vec::from_raw_parts(result.data, result.len, result.len);
+            }
+        }
+        if !result.png_data.is_null() && result.png_len > 0 {
+            unsafe {
+                let _ = Vec::from_raw_parts(result.png_data, result.png_len, result.png_len);
+            }
         }
     }
 }

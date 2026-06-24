@@ -10,6 +10,21 @@ use pyo3::types::{PyBytes, PyString};
 
 create_exception!(gatekeeper_cdr, GatekeeperError, PyException);
 
+#[pyclass]
+pub struct DisarmResult {
+    #[pyo3(get)]
+    pub buffer: Py<PyBytes>,
+    #[pyo3(get)]
+    pub png_buffer: Option<Py<PyBytes>>,
+    #[pyo3(get)]
+    pub original_size_bytes: usize,
+    #[pyo3(get)]
+    pub final_size_bytes: usize,
+    #[pyo3(get)]
+    pub detected_format: String,
+    #[pyo3(get)]
+    pub output_format: String,
+}
 
 /// Detect the format of an image/file payload without fully decoding it.
 ///
@@ -35,14 +50,25 @@ fn sniff_format<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyS
 
 /// Disarm and reconstruct a file payload, stripping all metadata and potential exploits.
 ///
-/// Accepts `bytes` and returns `bytes` representing the sanitized file.
+/// Accepts `bytes` and returns a `DisarmResult` object.
 /// Raises `GatekeeperError` if the payload is invalid, corrupt, or exceeds limits.
 #[pyfunction]
 #[pyo3(signature = (payload, /))]
-fn disarm<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+fn disarm<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<DisarmResult> {
     let clean = core_disarm(payload, None)
         .map_err(|e| GatekeeperError::new_err(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &clean.buffer))
+        
+    let buffer = PyBytes::new_bound(py, &clean.buffer).unbind();
+    let png_buffer = clean.png_buffer.as_ref().map(|b| PyBytes::new_bound(py, b).unbind());
+
+    Ok(DisarmResult {
+        buffer,
+        png_buffer,
+        original_size_bytes: clean.original_size_bytes,
+        final_size_bytes: clean.final_size_bytes,
+        detected_format: clean.detected_format.to_string(),
+        output_format: clean.output_format.to_string(),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,26 +89,15 @@ fn disarm<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyBytes>>
 /// import asyncio
 /// import gatekeeper_cdr
 ///
-/// async def sanitize(data: bytes) -> bytes:
-///     return await gatekeeper_cdr.disarm_async(data)
-///
-/// # With FastAPI:
-/// from fastapi import FastAPI, UploadFile
-/// app = FastAPI()
-///
-/// @app.post("/sanitize")
-/// async def upload(file: UploadFile):
-///     raw = await file.read()
-///     clean = await gatekeeper_cdr.disarm_async(raw)
-///     return Response(content=clean, media_type="application/octet-stream")
+/// async def sanitize(data: bytes):
+///     result = await gatekeeper_cdr.disarm_async(data)
+///     return result.buffer
 /// ```
 ///
 /// Raises `GatekeeperError` on sanitisation failure.
 #[pyfunction]
 #[pyo3(signature = (payload, /))]
 fn disarm_async<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    // Copy the bytes so the async task owns them independently of the
-    // Python frame lifetime.  This is a single allocation on the hot path.
     let data = payload.to_vec();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -90,9 +105,21 @@ fn disarm_async<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyA
             .await
             .map_err(|e| GatekeeperError::new_err(e.to_string()))?;
 
-        // Re-acquire the GIL to build the Python bytes object.
+        // Re-acquire the GIL to build the Python object.
         Python::with_gil(|py| {
-            Ok(PyBytes::new_bound(py, &result.buffer).into_any().unbind())
+            let buffer = PyBytes::new_bound(py, &result.buffer).unbind();
+            let png_buffer = result.png_buffer.as_ref().map(|b| PyBytes::new_bound(py, b).unbind());
+
+            let py_res = DisarmResult {
+                buffer,
+                png_buffer,
+                original_size_bytes: result.original_size_bytes,
+                final_size_bytes: result.final_size_bytes,
+                detected_format: result.detected_format.to_string(),
+                output_format: result.output_format.to_string(),
+            };
+            
+            Ok(py_res.into_py(py))
         })
     })
 }
@@ -101,6 +128,7 @@ fn disarm_async<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyA
 #[pymodule]
 fn gatekeeper_cdr(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GatekeeperError", m.py().get_type_bound::<GatekeeperError>())?;
+    m.add_class::<DisarmResult>()?;
     m.add_function(wrap_pyfunction!(sniff_format, m)?)?;
     m.add_function(wrap_pyfunction!(disarm, m)?)?;
     m.add_function(wrap_pyfunction!(disarm_async, m)?)?;

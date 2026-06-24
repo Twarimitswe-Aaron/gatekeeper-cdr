@@ -6,9 +6,11 @@
 export interface NodeDisarmResult {
   /** The mathematically safe, reconstructed byte stream, returned as a Node.js Buffer. */
   buffer: Buffer
+  pngBuffer?: Buffer
   originalSizeBytes: number
   finalSizeBytes: number
   detectedFormat: string
+  outputFormat: string
 }
 /**
  * Zero-trust Content Disarm and Reconstruction pipeline.

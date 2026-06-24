@@ -28,13 +28,13 @@ fn main() {
     }
 
     let input_path = Path::new(&args[1]);
-    let output_path = args
+    let base_output_path = args
         .get(2)
         .map(|s| s.as_str().to_owned())
         .unwrap_or_else(|| {
-            // Default: same name, .sanitized.png suffix
+            // Default: use the same stem
             let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
-            format!("{stem}.sanitized.png")
+            format!("{stem}.sanitized")
         });
 
     // ── Read input ────────────────────────────────────────────────────────
@@ -88,32 +88,45 @@ fn main() {
     // ── Run CDR pipeline ──────────────────────────────────────────────────
     println!("▶ Disarming...");
 
-    let sanitized = match disarm(&raw_bytes) {
-        Ok(s) => s,
+    let result = match disarm(&raw_bytes, None) {
+        Ok(res) => res,
         Err(e) => {
             eprintln!("✗ CDR pipeline failed: {e}");
             process::exit(1);
         }
     };
 
-    // External callers extract bytes via the public into_bytes() method.
-    // The formal `let SanitizedOutput(bytes) = ...` destructure is reserved
-    // for code inside the crate (e.g. a save_to_storage fn in the lib).
-    let clean_bytes = sanitized.into_bytes();
-
     println!(
-        "  Output   : {} bytes ({:.2} KB)",
-        clean_bytes.len(),
-        clean_bytes.len() as f64 / 1024.0
+        "  Native Output : {} bytes ({:.2} KB) [format: {}]",
+        result.final_size_bytes,
+        result.final_size_bytes as f64 / 1024.0,
+        result.output_format
     );
 
-    // ── Write output ──────────────────────────────────────────────────────
-    println!("▶ Writing  : {output_path}");
+    // ── Write outputs ─────────────────────────────────────────────────────
+    let native_out_path = format!("{}.{}", base_output_path, result.output_format);
+    println!("▶ Writing native : {}", native_out_path);
 
-    if let Err(e) = fs::write(&output_path, &clean_bytes) {
-        eprintln!("✗ Failed to write output: {e}");
+    if let Err(e) = fs::write(&native_out_path, &result.buffer) {
+        eprintln!("✗ Failed to write native output: {e}");
         process::exit(1);
     }
+    println!("✔ Done. Native sanitized file written to: {}", native_out_path);
 
-    println!("✔ Done. Sanitized PNG written to: {output_path}");
+    if let Some(png_bytes) = result.png_buffer {
+        let png_out_path = format!("{}.png", base_output_path);
+        println!("▶ Writing PNG    : {}", png_out_path);
+        
+        println!(
+            "  PNG Output    : {} bytes ({:.2} KB)",
+            png_bytes.len(),
+            png_bytes.len() as f64 / 1024.0
+        );
+
+        if let Err(e) = fs::write(&png_out_path, &png_bytes) {
+            eprintln!("✗ Failed to write PNG output: {e}");
+            process::exit(1);
+        }
+        println!("✔ Done. Lossless PNG file written to: {}", png_out_path);
+    }
 }

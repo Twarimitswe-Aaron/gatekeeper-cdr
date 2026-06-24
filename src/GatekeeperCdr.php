@@ -25,6 +25,9 @@ class GatekeeperCdr {
             bool ok;
             uint8_t *data;
             size_t len;
+            uint8_t *png_data;
+            size_t png_len;
+            char output_format[16];
             int32_t error_code;
         } CdrResult;
 
@@ -78,10 +81,10 @@ CDEF;
      * Sanitizes the input payload by stripping all metadata and potential exploits.
      * 
      * @param string $payload
-     * @return string
+     * @return array
      * @throws RuntimeException
      */
-    public static function disarm(string $payload): string {
+    public static function disarm(string $payload): array {
         self::init();
         if (empty($payload)) {
             throw new RuntimeException("Payload is empty");
@@ -100,8 +103,20 @@ CDEF;
         }
 
         $cleanPayload = FFI::string(FFI::cast("char *", $result->data), $result->len);
+        
+        $pngPayload = null;
+        if ($result->png_len > 0) {
+            $pngPayload = FFI::string(FFI::cast("char *", $result->png_data), $result->png_len);
+        }
+
+        $formatStr = FFI::string(FFI::cast("char *", $result->output_format));
+
         self::$ffi->gatekeeper_free_result($result);
 
-        return $cleanPayload;
+        return [
+            'buffer' => $cleanPayload,
+            'png_buffer' => $pngPayload,
+            'output_format' => $formatStr
+        ];
     }
 }

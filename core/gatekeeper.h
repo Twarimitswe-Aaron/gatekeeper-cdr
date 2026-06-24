@@ -7,10 +7,13 @@
 #include <stdlib.h>
 
 typedef struct CdrResult {
-  bool ok;
-  uint8_t *data;
-  size_t len;
-  int32_t error_code;
+    bool ok;
+    uint8_t *data;
+    size_t len;
+    uint8_t *png_data;
+    size_t png_len;
+    char output_format[16];
+    int32_t error_code;
 } CdrResult;
 
 #ifdef __cplusplus
