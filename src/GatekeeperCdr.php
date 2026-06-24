@@ -28,7 +28,7 @@ class GatekeeperCdr {
             int32_t error_code;
         } CdrResult;
 
-        int32_t gatekeeper_sniff_format(const uint8_t *raw, size_t len, uint8_t *out_fmt, size_t out_len);
+        int32_t gatekeeper_sniff_format(const uint8_t *raw, size_t len, char *out_fmt, size_t out_len);
         CdrResult gatekeeper_disarm(const uint8_t *raw, size_t len);
         void gatekeeper_free_result(CdrResult result);
 CDEF;
@@ -99,7 +99,7 @@ CDEF;
             throw new RuntimeException("Gatekeeper CDR failed (error code: $errorCode)");
         }
 
-        $cleanPayload = FFI::string($result->data, $result->len);
+        $cleanPayload = FFI::string(FFI::cast("char *", $result->data), $result->len);
         self::$ffi->gatekeeper_free_result($result);
 
         return $cleanPayload;
