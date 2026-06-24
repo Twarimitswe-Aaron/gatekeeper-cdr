@@ -63,7 +63,7 @@ CDEF;
         FFI::memcpy($cRaw, $payload, $len);
 
         $outLen = 16;
-        $cOutFmt = FFI::new("uint8_t[$outLen]");
+        $cOutFmt = FFI::new("char[$outLen]");
 
         $resultCode = self::$ffi->gatekeeper_sniff_format($cRaw, $len, $cOutFmt, $outLen);
 
