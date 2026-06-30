@@ -6,7 +6,7 @@
 
     <groupId>io.github.twarimitswe-aaron</groupId>
     <artifactId>gatekeeper-cdr</artifactId>
-    <version>0.4.7</version>
+    <version>0.4.8</version>
     
     <name>Gatekeeper CDR</name>
     <description>Zero-trust Content Disarm and Reconstruction engine</description>
