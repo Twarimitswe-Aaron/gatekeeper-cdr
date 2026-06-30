@@ -293,6 +293,10 @@ pub fn sniff_format(payload: &[u8]) -> Result<FileFormat, CdrError> {
 //  Top-level dispatch: disarm()
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Internal result of a single sanitizer dispatch: the native output buffer,
+/// an optional lossless-PNG companion, and the native output format tag.
+type DispatchOutput = (Vec<u8>, Option<Vec<u8>>, &'static str);
+
 /// The rich result object returned by the CDR engine, containing the safe byte
 /// buffer and detailed telemetry regarding the file sizes and formats.
 #[derive(Debug)]
@@ -336,37 +340,64 @@ pub fn disarm(payload: &[u8], expected_format: Option<&str>) -> Result<DisarmRes
         }
     }
 
-    let (native_bytes, png_bytes, output_fmt): (Vec<u8>, Option<Vec<u8>>, &'static str) =
-        match format {
-            FileFormat::Jpeg => {
-                // Decode once → JPEG (native, metadata stripped) + PNG (lossless guarantee)
-                let jpeg_out = sanitize_jpeg(payload)?.into_bytes();
-                let png_out = sanitize_jpeg_to_png(payload)?.into_bytes();
-                (jpeg_out, Some(png_out), "jpeg")
+    // ── Panic isolation ───────────────────────────────────────────────────
+    //
+    // Every sanitizer leans on a third-party decoder (zune-jpeg, png, gif,
+    // image-webp, lopdf, zip) to parse hostile bytes.  Those crates can panic
+    // on crafted input (integer overflow, slice OOB, `unwrap`).  A panic that
+    // unwound past this point would either abort the whole host process (under
+    // `panic = "abort"`) or unwind across an FFI boundary (UB).  We trap it
+    // here and convert it into a typed `SanitizerPanicked` error so a single
+    // malicious file can never take down the embedding application.
+    //
+    // `AssertUnwindSafe` is sound here: the only captured state is the
+    // immutable input slice and a `Copy` format tag; nothing observably
+    // broken can leak out of the closure because we discard the panic payload
+    // and return an error instead of resuming with shared mutable state.
+    let dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<DispatchOutput, CdrError> {
+            match format {
+                FileFormat::Jpeg => {
+                    // Decode → JPEG (native, metadata stripped) + PNG (lossless guarantee)
+                    let jpeg_out = sanitize_jpeg(payload)?.into_bytes();
+                    let png_out = sanitize_jpeg_to_png(payload)?.into_bytes();
+                    Ok((jpeg_out, Some(png_out), "jpeg"))
+                }
+                FileFormat::Png => {
+                    // buffer IS already a lossless PNG — no second copy needed
+                    let png_out = sanitize_png(payload)?.into_bytes();
+                    Ok((png_out, None, "png"))
+                }
+                FileFormat::Gif => {
+                    // GIF (palette-indexed native) + PNG (lossless RGBA guarantee)
+                    let gif_out = sanitize_gif(payload)?.into_bytes();
+                    let png_out = sanitize_gif_to_png(payload)?.into_bytes();
+                    Ok((gif_out, Some(png_out), "gif"))
+                }
+                FileFormat::Webp => {
+                    // No stable pure-Rust WebP encoder; buffer IS the PNG — no second copy
+                    let png_out = sanitize_webp(payload)?.into_bytes();
+                    Ok((png_out, None, "png"))
+                }
+                FileFormat::Office => {
+                    let out = sanitize_office(payload)?.into_bytes();
+                    Ok((out, None, "office"))
+                }
+                FileFormat::Pdf => {
+                    let out = sanitize_pdf(payload)?.into_bytes();
+                    Ok((out, None, "pdf"))
+                }
             }
-            FileFormat::Png => {
-                // buffer IS already a lossless PNG — no second copy needed
-                let png_out = sanitize_png(payload)?.into_bytes();
-                (png_out, None, "png")
-            }
-            FileFormat::Gif => {
-                // GIF (palette-indexed native) + PNG (lossless RGBA guarantee)
-                let gif_out = sanitize_gif(payload)?.into_bytes();
-                let png_out = sanitize_gif_to_png(payload)?.into_bytes();
-                (gif_out, Some(png_out), "gif")
-            }
-            FileFormat::Webp => {
-                // No stable pure-Rust WebP encoder; buffer IS the PNG — no second copy
-                let png_out = sanitize_webp(payload)?.into_bytes();
-                (png_out, None, "png")
-            }
-            FileFormat::Office => {
-                let out = sanitize_office(payload)?.into_bytes();
-                (out, None, "office")
-            }
-            FileFormat::Pdf => {
-                let out = sanitize_pdf(payload)?.into_bytes();
-                (out, None, "pdf")
+        },
+    ));
+
+    let (native_bytes, png_bytes, output_fmt): DispatchOutput =
+        match dispatch {
+            Ok(inner) => inner?,
+            Err(_) => {
+                return Err(CdrError::SanitizerPanicked {
+                    format: format.as_str(),
+                });
             }
         };
 

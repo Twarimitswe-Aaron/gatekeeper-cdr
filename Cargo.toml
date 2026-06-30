@@ -9,3 +9,29 @@ members = [
 ]
 
 resolver = "2"
+
+# ── Build profiles ────────────────────────────────────────────────────────────
+# Profiles MUST live in the workspace root manifest; Cargo silently ignores
+# `[profile.*]` tables declared in member crates (e.g. `core/Cargo.toml`).
+
+# Development Configuration (optimised for active local engineering)
+[profile.dev]
+opt-level = 1       # Light optimisations so the pipeline runs reasonably fast
+debug = true        # Complete symbol maps for step-through debugging
+
+# Production Release Configuration (optimised for size + safety)
+[profile.release]
+opt-level = 3       # Maximise hardware execution optimisations
+lto = true          # Link-Time Optimisation across all dependency crates
+codegen-units = 1   # Single codegen unit unlocks deeper cross-crate inlining
+strip = true        # Strip symbols and debug info from the binary
+
+# IMPORTANT: keep stack unwinding ENABLED.
+#
+# Gatekeeper is a security library exposed through FFI (Go/Java/C/C++) and
+# language bindings (Node/Python/PHP).  Its core deliberately traps decoder
+# panics via `std::panic::catch_unwind` in `sniffer::disarm` so a single
+# crafted file cannot abort the embedding host process.  `panic = "abort"`
+# would make `catch_unwind` a no-op (the process aborts before the unwind is
+# caught), defeating that protection — so we MUST NOT set it here.
+panic = "unwind"

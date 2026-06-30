@@ -1,6 +1,41 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
-use crate::{FileFormat, disarm, sniff_format};
+use crate::errors::CdrError;
+use crate::{disarm, sniff_format};
 use std::slice;
+
+/// Transfer ownership of a `Vec<u8>` to C as a raw `(ptr, len)` pair.
+///
+/// The buffer is converted to a `Box<[u8]>` first so its backing allocation is
+/// exactly `len` bytes.  This is the invariant that makes the paired free in
+/// [`gatekeeper_free_result`] sound: reconstructing the boxed slice from
+/// `(ptr, len)` deallocates with the correct `Layout`.
+///
+/// An empty buffer returns a null pointer (and length 0), which the free path
+/// treats as "nothing to release".
+fn into_raw_bytes(vec: Vec<u8>) -> (*mut u8, usize) {
+    if vec.is_empty() {
+        return (std::ptr::null_mut(), 0);
+    }
+    let boxed: Box<[u8]> = vec.into_boxed_slice();
+    let len = boxed.len();
+    let ptr = Box::into_raw(boxed) as *mut u8;
+    (ptr, len)
+}
+
+/// Inverse of [`into_raw_bytes`]: reclaim and drop a buffer previously handed
+/// to C.  Safe to call with a null pointer (no-op).
+///
+/// # Safety
+/// `ptr` must either be null or have come from [`into_raw_bytes`] with the same
+/// `len`, and must not have been freed already.
+unsafe fn drop_raw_bytes(ptr: *mut u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    // Reconstruct the exact `Box<[u8]>` allocation and let it drop.
+    let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr, len);
+    drop(unsafe { Box::from_raw(slice_ptr) });
+}
 
 #[repr(C)]
 pub struct CdrResult {
@@ -26,20 +61,21 @@ impl CdrResult {
         }
     }
 
-    fn success(mut vec: Vec<u8>, png_opt: Option<Vec<u8>>, format: &str) -> Self {
-        vec.shrink_to_fit();
-        let len = vec.len();
-        let data = vec.as_mut_ptr();
-        std::mem::forget(vec);
+    fn success(vec: Vec<u8>, png_opt: Option<Vec<u8>>, format: &str) -> Self {
+        // SAFETY/CORRECTNESS: we hand ownership to C via `Box<[u8]>::into_raw`,
+        // NOT `Vec::as_mut_ptr` + `mem::forget`.  The previous approach called
+        // `shrink_to_fit()` and then reconstructed the Vec with `capacity ==
+        // len`, but `shrink_to_fit` is best-effort: the allocator may keep
+        // excess capacity, so freeing with `capacity == len` deallocated with
+        // the wrong `Layout` → undefined behaviour / heap corruption.
+        //
+        // A boxed slice has an allocation whose size is EXACTLY its length, so
+        // the matching free in `gatekeeper_free_result` (reconstructing the
+        // boxed slice from `(ptr, len)`) is always sound.
+        let (data, len) = into_raw_bytes(vec);
 
         let (png_data, png_len) = match png_opt {
-            Some(mut pvec) => {
-                pvec.shrink_to_fit();
-                let plen = pvec.len();
-                let pdata = pvec.as_mut_ptr();
-                std::mem::forget(pvec);
-                (pdata, plen)
-            }
+            Some(pvec) => into_raw_bytes(pvec),
             None => (std::ptr::null_mut(), 0),
         };
 
@@ -78,16 +114,15 @@ pub extern "C" fn gatekeeper_sniff_format(
 
     let payload = unsafe { slice::from_raw_parts(raw, len) };
 
-    match sniff_format(payload) {
-        Ok(format) => {
-            let format_str: &[u8] = match format {
-                FileFormat::Jpeg => b"Jpeg",
-                FileFormat::Png => b"Png",
-                FileFormat::Gif => b"Gif",
-                FileFormat::Webp => b"Webp",
-                FileFormat::Office => b"Office",
-                FileFormat::Pdf => b"Pdf",
-            };
+    // Trap any decoder panic so a crafted file cannot abort the FFI host.
+    let sniffed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sniff_format(payload)));
+
+    match sniffed {
+        Ok(Ok(format)) => {
+            // Lowercase names, matching `FileFormat::as_str` and the
+            // `detected_format` / `output_format` fields returned by disarm —
+            // keeping a single, consistent vocabulary across the whole ABI.
+            let format_str = format.as_str().as_bytes();
 
             let bytes_to_copy = std::cmp::min(format_str.len(), out_len - 1); // -1 for null terminator
             let out_slice = unsafe { slice::from_raw_parts_mut(out_fmt, out_len) };
@@ -97,7 +132,8 @@ pub extern "C" fn gatekeeper_sniff_format(
 
             0
         }
-        Err(_) => 2, // Could map specific errors if needed
+        Ok(Err(e)) => e.code(),
+        Err(_) => CdrError::SanitizerPanicked { format: "sniff" }.code(),
     }
 }
 
@@ -113,9 +149,15 @@ pub extern "C" fn gatekeeper_disarm(raw: *const u8, len: usize) -> CdrResult {
 
     let payload = unsafe { slice::from_raw_parts(raw, len) };
 
-    match disarm(payload, None) {
-        Ok(clean) => CdrResult::success(clean.buffer, clean.png_buffer, clean.output_format),
-        Err(_) => CdrResult::error(2), // Could map specific errors to distinct codes
+    // `disarm` already traps sanitizer panics internally, but we add a belt-and
+    // -braces guard so even a panic in the success/marshalling path cannot
+    // unwind across the `extern "C"` boundary (which would be UB).
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| disarm(payload, None)));
+
+    match outcome {
+        Ok(Ok(clean)) => CdrResult::success(clean.buffer, clean.png_buffer, clean.output_format),
+        Ok(Err(e)) => CdrResult::error(e.code()),
+        Err(_) => CdrResult::error(CdrError::SanitizerPanicked { format: "ffi" }.code()),
     }
 }
 
@@ -125,15 +167,9 @@ pub extern "C" fn gatekeeper_disarm(raw: *const u8, len: usize) -> CdrResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn gatekeeper_free_result(result: CdrResult) {
     if result.ok {
-        if !result.data.is_null() && result.len > 0 {
-            unsafe {
-                let _ = Vec::from_raw_parts(result.data, result.len, result.len);
-            }
-        }
-        if !result.png_data.is_null() && result.png_len > 0 {
-            unsafe {
-                let _ = Vec::from_raw_parts(result.png_data, result.png_len, result.png_len);
-            }
+        unsafe {
+            drop_raw_bytes(result.data, result.len);
+            drop_raw_bytes(result.png_data, result.png_len);
         }
     }
 }

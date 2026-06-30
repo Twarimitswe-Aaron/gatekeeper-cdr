@@ -143,6 +143,17 @@ pub enum CdrError {
     #[error("Office file is structurally malformed: missing [Content_Types].xml")]
     OfficeMissingContentTypes,
 
+    /// An Office part decompresses to a size that exceeds the safety cap, or the
+    /// archive as a whole inflates beyond the total budget (zip-bomb guard).
+    #[error("Office archive exceeds the decompressed size budget: {bytes} bytes over limit {limit}")]
+    OfficeArchiveTooLarge { bytes: usize, limit: usize },
+
+    /// An Office document carries non-removable active content (e.g. a DDE field
+    /// or a remote-template auto-load) that cannot be reconstructed away safely.
+    /// The engine fails closed rather than emitting a deceptively "clean" file.
+    #[error("Office document contains dangerous active content that cannot be neutralised: {kind}")]
+    OfficeDangerousContent { kind: &'static str },
+
     // ── Stage 6 – PDF Formats ─────────────────────────────────────────────
     /// The PDF decoder surfaced a structural error in the input stream.
     #[error("PDF decode failure: {source}")]
@@ -151,6 +162,12 @@ pub enum CdrError {
     /// The PDF encoder returned an I/O error while writing into the output buffer.
     #[error("PDF encode failure: {source}")]
     PdfEncodeFailed { source: std::io::Error },
+
+    /// The reconstructed PDF exceeds the maximum allowed output size.  This is the
+    /// decompression-bomb guard for PDFs: a small input with deeply compressed
+    /// object streams can expand to gigabytes after `lopdf` rebuilds it.
+    #[error("PDF output too large: {bytes} bytes exceeds the safety cap of {limit} bytes")]
+    PdfTooLarge { bytes: usize, limit: usize },
 
     // ── Stage 7 – Async I/O ───────────────────────────────────────────────
     /// An underlying I/O error occurred while reading from an async source.
@@ -172,4 +189,55 @@ pub enum CdrError {
     /// input to the caller, which would violate the zero-trust contract.
     #[error("format '{format}' is recognised but its CDR pipeline is not yet implemented")]
     Unimplemented { format: &'static str },
+
+    // ── Stage 8 – Panic isolation ─────────────────────────────────────────
+    /// A third-party decoder/encoder panicked on hostile input.  Gatekeeper
+    /// traps the unwind at the pipeline boundary and converts it into this
+    /// typed error so a single crafted file can never abort the host process
+    /// (web server, language runtime, etc.).
+    #[error("the '{format}' sanitizer panicked on hostile input and was contained")]
+    SanitizerPanicked { format: &'static str },
+}
+
+impl CdrError {
+    /// Stable, distinct numeric code for every error variant.
+    ///
+    /// Used by the C ABI (`gatekeeper_disarm` / `gatekeeper_sniff_format`) so
+    /// FFI consumers (Go, Java, C/C++) can distinguish failure causes instead
+    /// of collapsing everything into a single opaque code.  These values are
+    /// part of the ABI contract — only ever append, never renumber.
+    #[must_use]
+    pub const fn code(&self) -> i32 {
+        match self {
+            CdrError::PayloadTooShort { .. } => 10,
+            CdrError::PayloadTooLarge { .. } => 11,
+            CdrError::UnknownFormat { .. } => 12,
+            CdrError::FormatMismatch { .. } => 13,
+            CdrError::JpegMissingEoi => 20,
+            CdrError::PngMissingIhdr => 21,
+            CdrError::JpegDecodeFailed { .. } => 30,
+            CdrError::PngDecodeFailed { .. } => 31,
+            CdrError::GifDecodeFailed { .. } => 32,
+            CdrError::WebpDecodeFailed { .. } => 33,
+            CdrError::MissingImageInfo => 40,
+            CdrError::DegenerateDimensions { .. } => 41,
+            CdrError::DimensionTooLarge { .. } => 42,
+            CdrError::ImageTooLarge { .. } => 43,
+            CdrError::PixelBufferMismatch { .. } => 44,
+            CdrError::PngEncodeFailed { .. } => 50,
+            CdrError::JpegEncodeFailed { .. } => 51,
+            CdrError::GifEncodeFailed { .. } => 52,
+            CdrError::ZipDecodeFailed { .. } => 60,
+            CdrError::ZipEncodeFailed { .. } => 61,
+            CdrError::OfficeMissingContentTypes => 62,
+            CdrError::OfficeArchiveTooLarge { .. } => 63,
+            CdrError::OfficeDangerousContent { .. } => 64,
+            CdrError::PdfDecodeFailed { .. } => 70,
+            CdrError::PdfEncodeFailed { .. } => 71,
+            CdrError::PdfTooLarge { .. } => 72,
+            CdrError::IoError { .. } => 80,
+            CdrError::Unimplemented { .. } => 90,
+            CdrError::SanitizerPanicked { .. } => 99,
+        }
+    }
 }

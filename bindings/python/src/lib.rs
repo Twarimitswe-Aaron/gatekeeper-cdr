@@ -1,7 +1,7 @@
 #![allow(unexpected_cfgs)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use gatekeeper::{disarm as core_disarm, sniff_format as core_sniff_format, FileFormat};
+use gatekeeper::{disarm as core_disarm, sniff_format as core_sniff_format};
 use gatekeeper::async_stream::disarm_bytes_async;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -35,17 +35,10 @@ pub struct DisarmResult {
 fn sniff_format<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyString>> {
     let format = core_sniff_format(payload)
         .map_err(|e| GatekeeperError::new_err(e.to_string()))?;
-    
-    let format_str = match format {
-        FileFormat::Jpeg => "Jpeg",
-        FileFormat::Png => "Png",
-        FileFormat::Gif => "Gif",
-        FileFormat::Webp => "Webp",
-        FileFormat::Pdf => "Pdf",
-        FileFormat::Office => "Office",
-    };
-    
-    Ok(PyString::new_bound(py, format_str))
+
+    // Lowercase, matching `detected_format` / `output_format` returned by
+    // `disarm` so callers see one consistent vocabulary everywhere.
+    Ok(PyString::new_bound(py, format.as_str()))
 }
 
 /// Disarm and reconstruct a file payload, stripping all metadata and potential exploits.

@@ -58,15 +58,8 @@ futures = "0.3"
 # Used in integration tests to generate deterministic synthetic JPEG fixtures
 # without external file I/O.
 
-# Development Configuration (Optimized for active local engineering)
-[profile.dev]
-opt-level = 1       # Light optimizations so loop components run reasonably fast
-debug = true        # Generates complete symbol maps for step-through debugging
-
-# Production Release Configuration (Optimized for minimal binary size & safety)
-[profile.release]
-opt-level = 3       # Maximize hardware execution optimizations
-lto = true          # Enables Link-Time Optimization across ALL dependency crates
-codegen-units = 1   # Drops compilation threads to 1, unlocking deeper macro optimizations
-panic = 'abort'     # Strips out stack-unwinding code, dropping binary size significantly
-strip = true        # Strip symbols and debug info from binary
+# NOTE: Build profiles ([profile.dev] / [profile.release]) are defined in the
+# workspace root manifest. Cargo ignores profile tables in member crates, so
+# they were moved there. Crucially, the release profile keeps `panic = "unwind"`
+# so the `catch_unwind` panic-isolation guard in `sniffer::disarm` stays
+# effective for FFI consumers.

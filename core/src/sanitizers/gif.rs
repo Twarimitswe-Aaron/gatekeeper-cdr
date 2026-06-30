@@ -1,23 +1,27 @@
 use crate::errors::CdrError;
+use crate::sanitizers::encode::tune_png_encoder;
 use crate::sanitizers::jpeg::SanitizedOutput;
 use gif::{ColorOutput, DecodeOptions, Encoder as GifEncoder, Frame, Repeat};
-use png::{BitDepth, ColorType as PngColorType, Compression, Encoder as PngEncoder};
+use png::{BitDepth, ColorType as PngColorType, Encoder as PngEncoder};
 
 const MAX_DIMENSION: u32 = 16_384;
 const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_COMPRESSED_BYTES: usize = 32 * 1024 * 1024;
 const MIN_GIF_LEN: usize = 6;
 
-#[repr(C)]
+/// Quantizer effort for GIF re-encode (`gif::Frame::from_rgba_speed`).
+///
+/// The valid range is 1 (best quality, slowest) … 30 (lowest quality, fastest).
+/// 10 is a balanced default that runs in roughly O(pixels) via NeuQuant —
+/// replacing the previous hand-rolled O(pixels × palette) nearest-colour scan,
+/// which was a CPU-exhaustion vector at the allowed image dimensions.
+const GIF_QUANT_SPEED: i32 = 10;
+
 struct GifPixelMatrix {
     /// Raw RGBA pixels from the first frame of the decoded GIF.
     pixels: Vec<u8>,
     width: u16,
     height: u16,
-    /// The global colour palette from the decoded GIF, if present.
-    palette: Vec<u8>,
-    /// The transparent index from the original frame, if any.
-    transparent: Option<u8>,
 }
 
 pub struct RawGifPayload<'a>(&'a [u8]);
@@ -101,9 +105,6 @@ impl<'a> GifPipeline<RawGifPayload<'a>> {
             });
         }
 
-        // Capture the global palette before reading frames.
-        let palette = decoder.global_palette().unwrap_or(&[]).to_vec();
-
         let frame = decoder
             .read_next_frame()
             .map_err(|e| CdrError::GifDecodeFailed { source: e })?
@@ -118,15 +119,11 @@ impl<'a> GifPipeline<RawGifPayload<'a>> {
         }
         pixels.copy_from_slice(&frame.buffer);
 
-        let transparent = frame.transparent;
-
         Ok(GifPipeline {
             stage: DisarmedGifMatrix(GifPixelMatrix {
                 pixels,
                 width,
                 height,
-                palette,
-                transparent,
             }),
         })
     }
@@ -136,69 +133,32 @@ impl GifPipeline<DisarmedGifMatrix> {
     /// Re-encodes the pixel matrix as a clean GIF.
     /// Only pixel data survives — all extension blocks, comment blocks,
     /// and application-extension payloads from the original are discarded.
+    ///
+    /// The frame is re-quantised from raw RGBA via NeuQuant
+    /// (`Frame::from_rgba_speed`), which builds a fresh, image-appropriate local
+    /// palette.  This both fixes the previous behaviour (colour images falling
+    /// back to a greyscale ramp when the source had no global palette) and
+    /// removes the quadratic nearest-colour scan that was a CPU-DoS at large
+    /// dimensions.  Transparency is preserved by `from_rgba_speed` itself.
     pub fn reconstruct(self) -> Result<GifPipeline<PristineGifStream>, CdrError> {
         let DisarmedGifMatrix(matrix) = self.stage;
         let GifPixelMatrix {
-            pixels,
+            mut pixels,
             width,
             height,
-            palette,
-            transparent,
         } = matrix;
 
         let mut output: Vec<u8> = Vec::new();
-
-        // Use the original palette if present; otherwise build a greyscale fallback.
-        let pal: Vec<u8> = if !palette.is_empty() {
-            palette
-        } else {
-            (0u8..=255).flat_map(|i| [i, i, i]).collect()
-        };
-
         {
-            let mut encoder = GifEncoder::new(&mut output, width, height, &pal)
+            // Empty global palette: each frame carries its own local palette
+            // produced by the quantizer.
+            let mut encoder = GifEncoder::new(&mut output, width, height, &[])
                 .map_err(|e| CdrError::GifEncodeFailed { source: e })?;
             encoder
                 .set_repeat(Repeat::Finite(0))
                 .map_err(|e| CdrError::GifEncodeFailed { source: e })?;
 
-            // Convert RGBA pixels to palette-indexed using nearest-colour lookup.
-            let mut transparent_found = false;
-            let indexed: Vec<u8> = pixels
-                .chunks(4)
-                .map(|rgba| {
-                    if let Some(t_idx) = transparent {
-                        // If pixel is fully transparent, emit the transparent index.
-                        if rgba[3] < 128 {
-                            transparent_found = true;
-                            return t_idx;
-                        }
-                    }
-                    let r = rgba[0] as i32;
-                    let g = rgba[1] as i32;
-                    let b = rgba[2] as i32;
-                    pal.chunks(3)
-                        .enumerate()
-                        .min_by_key(|(_, c)| {
-                            let dr = r - c[0] as i32;
-                            let dg = g - c[1] as i32;
-                            let db = b - c[2] as i32;
-                            dr * dr + dg * dg + db * db
-                        })
-                        .map(|(i, _)| i as u8)
-                        .unwrap_or(0)
-                })
-                .collect();
-
-            let mut frame = Frame {
-                width,
-                height,
-                buffer: std::borrow::Cow::Owned(indexed),
-                ..Default::default()
-            };
-            if transparent_found {
-                frame.transparent = transparent;
-            }
+            let frame = Frame::from_rgba_speed(width, height, &mut pixels, GIF_QUANT_SPEED);
             encoder
                 .write_frame(&frame)
                 .map_err(|e| CdrError::GifEncodeFailed { source: e })?;
@@ -277,7 +237,7 @@ pub fn sanitize_gif_to_png(input: &[u8]) -> Result<SanitizedOutput, CdrError> {
         let mut enc = PngEncoder::new(&mut output, width, height);
         enc.set_color(PngColorType::Rgba);
         enc.set_depth(BitDepth::Eight);
-        enc.set_compression(Compression::Best);
+        tune_png_encoder(&mut enc);
         let mut writer = enc
             .write_header()
             .map_err(|e| CdrError::PngEncodeFailed { source: e })?;

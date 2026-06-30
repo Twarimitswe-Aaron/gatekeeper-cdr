@@ -49,8 +49,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
+use crate::sanitizers::encode::{tune_png_encoder, JPEG_REENCODE_QUALITY};
 use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
-use png::{BitDepth, ColorType as PngColorType, Compression, Encoder as PngEncoder};
+use png::{BitDepth, ColorType as PngColorType, Encoder as PngEncoder};
 use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
 
@@ -565,9 +566,9 @@ impl JpegPipeline<DisarmedMatrix> {
     /// Re-encodes the pixel matrix as a clean JPEG. The encoder writes only
     /// raw pixel data — all original APP/EXIF/COM/ICC markers are absent.
     ///
-    /// Quality 90 balances file size against visual fidelity. The re-quantization
-    /// at this step cryptographically destroys any steganographic payload that
-    /// was hidden in the original DCT coefficient LSBs.
+    /// Quality [`JPEG_REENCODE_QUALITY`] balances file size against visual fidelity.
+    /// The re-quantization at this step cryptographically destroys any steganographic
+    /// payload that was hidden in the original DCT coefficient LSBs.
     pub fn reconstruct(self) -> Result<JpegPipeline<PristineStream>, CdrError> {
         let DisarmedMatrix(matrix) = self.stage;
         let PixelMatrix {
@@ -577,7 +578,7 @@ impl JpegPipeline<DisarmedMatrix> {
         } = matrix;
 
         let mut output: Vec<u8> = Vec::new();
-        JpegEncoder::new(&mut output, 90)
+        JpegEncoder::new(&mut output, JPEG_REENCODE_QUALITY)
             .encode(&pixels, width as u16, height as u16, JpegColorType::Rgb)
             .map_err(|e| CdrError::JpegEncodeFailed { source: e })?;
         Ok(JpegPipeline {
@@ -605,7 +606,7 @@ impl JpegPipeline<DisarmedMatrix> {
             let mut enc = PngEncoder::new(&mut output, width, height);
             enc.set_color(PngColorType::Rgb);
             enc.set_depth(BitDepth::Eight);
-            enc.set_compression(Compression::Best);
+            tune_png_encoder(&mut enc);
             let mut writer = enc
                 .write_header()
                 .map_err(|e| CdrError::PngEncodeFailed { source: e })?;

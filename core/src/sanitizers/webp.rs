@@ -1,7 +1,8 @@
 use crate::errors::CdrError;
+use crate::sanitizers::encode::tune_png_encoder;
 use crate::sanitizers::jpeg::SanitizedOutput;
 use image_webp::WebPDecoder;
-use png::{BitDepth, ColorType, Compression, Encoder};
+use png::{BitDepth, ColorType, Encoder};
 
 const MAX_DIMENSION: u32 = 16_384;
 const MAX_PIXEL_BYTES: usize = 256 * 1024 * 1024;
@@ -81,19 +82,20 @@ impl<'a> WebpPipeline<RawWebpPayload<'a>> {
             });
         }
 
-        // WebP can be lossy (YUV/RGB) or lossless (RGBA).
-        // Let's decode to RGBA to be safe, or check color type.
-        // image-webp usually provides an easy way to read image data.
+        // WebP can be lossy (RGB) or lossless / alpha (RGBA).  Derive the colour
+        // model from the decoder, but size the output buffer from the decoder's
+        // OWN `output_buffer_size()` rather than recomputing it: `read_image`
+        // rejects any buffer whose length differs from that value, so trusting
+        // the library here avoids a mismatch panic/error on edge cases.
         let color_type = if decoder.has_alpha() {
             ColorType::Rgba
         } else {
             ColorType::Rgb
         };
-        let channels = if decoder.has_alpha() { 4 } else { 3 };
 
-        let expected = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(channels);
+        let expected = decoder
+            .output_buffer_size()
+            .ok_or(CdrError::MissingImageInfo)?;
 
         if expected > MAX_PIXEL_BYTES {
             return Err(CdrError::ImageTooLarge {
@@ -145,7 +147,7 @@ impl WebpPipeline<DisarmedWebpMatrix> {
             let mut encoder = Encoder::new(&mut output, width, height);
             encoder.set_color(color_type);
             encoder.set_depth(bit_depth);
-            encoder.set_compression(Compression::Best);
+            tune_png_encoder(&mut encoder);
 
             let mut writer = encoder
                 .write_header()

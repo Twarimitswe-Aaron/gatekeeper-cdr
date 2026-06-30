@@ -743,3 +743,308 @@ mod async_tests {
         assert!(matches!(err, CdrError::UnknownFormat { .. }), "got {err:?}");
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+//  Hardening regression tests
+//
+//  These lock in the security/correctness fixes so they cannot silently regress:
+//    • PNG  — indexed-palette images round-trip (palette + tRNS carried).
+//    • GIF  — colour is preserved (no greyscale fallback) via NeuQuant re-encode.
+//    • PDF  — actions are stripped recursively (nested-in-array + stream dicts).
+//    • Office — macros dropped case-insensitively; DDE fails closed.
+//    • FFI  — disarm→free round-trip is sound (boxed-slice ownership transfer).
+// ───────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+    use crate::errors::CdrError;
+
+    // ── PNG: indexed palette round-trip (H2) ──────────────────────────────────
+
+    /// Before the fix, an indexed PNG was re-encoded as `Indexed` WITHOUT its
+    /// PLTE palette, producing an invalid/broken file (or an encoder error).
+    /// Now the palette (and tRNS) must survive the pipeline.
+    #[test]
+    fn png_indexed_palette_round_trips() {
+        use png::{BitDepth, ColorType, Decoder, Encoder};
+
+        let mut fixture: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut fixture, 2, 2);
+            enc.set_color(ColorType::Indexed);
+            enc.set_depth(BitDepth::Eight);
+            enc.set_palette(vec![255, 0, 0, 0, 255, 0, 0, 0, 255]); // R, G, B
+            enc.set_trns(vec![0u8]); // index 0 fully transparent
+            let mut w = enc.write_header().expect("indexed header");
+            w.write_image_data(&[0, 1, 2, 0]).expect("indices");
+        }
+
+        let clean = disarm(&fixture, None).expect("indexed PNG must sanitize");
+        assert_eq!(clean.output_format, "png");
+
+        // Re-decode the sanitized output: it must be a valid, still-indexed PNG
+        // that carries a palette.
+        let reader = Decoder::new(std::io::Cursor::new(&clean.buffer))
+            .read_info()
+            .expect("sanitized indexed PNG must be valid");
+        assert_eq!(reader.info().color_type, ColorType::Indexed);
+        assert!(
+            reader.info().palette.is_some(),
+            "PLTE palette must be carried into the sanitized output"
+        );
+    }
+
+    // ── GIF: colour preserved, not greyscale (H3) ─────────────────────────────
+
+    /// Build a solid-red GIF, sanitize it, and confirm the decoded output is
+    /// still red.  The old greyscale-fallback path would have turned it grey.
+    #[test]
+    fn gif_preserves_colour_not_greyscale() {
+        use gif::{Encoder, Frame, Repeat};
+
+        // ── Source: a 4×4 solid-red GIF ──────────────────────────────────────
+        let mut src: Vec<u8> = Vec::new();
+        let mut rgba = vec![0u8; 4 * 4 * 4];
+        for px in rgba.chunks_mut(4) {
+            px.copy_from_slice(&[255, 0, 0, 255]);
+        }
+        {
+            let frame = Frame::from_rgba_speed(4, 4, &mut rgba.clone(), 10);
+            let mut enc = Encoder::new(&mut src, 4, 4, &[]).expect("gif encoder");
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            enc.write_frame(&frame).expect("write src frame");
+        }
+
+        let clean = disarm(&src, None).expect("GIF must sanitize");
+        assert_eq!(clean.output_format, "gif");
+        assert!(clean.buffer.starts_with(b"GIF"), "output must be a GIF");
+
+        // Decode the sanitized GIF and verify the first pixel is still red.
+        let mut opts = gif::DecodeOptions::new();
+        opts.set_color_output(gif::ColorOutput::RGBA);
+        let mut dec = opts
+            .read_info(std::io::Cursor::new(&clean.buffer))
+            .expect("valid sanitized GIF");
+        let frame = dec.read_next_frame().unwrap().expect("a frame").clone();
+        let p = &frame.buffer[..4];
+        assert!(
+            p[0] > 200 && p[1] < 60 && p[2] < 60,
+            "colour must survive quantization (got {p:?}), not collapse to grey"
+        );
+    }
+
+    // ── PDF: recursive action stripping (C1) ──────────────────────────────────
+
+    /// A PDF with `/OpenAction` at the catalog level AND `/JS` hidden inside a
+    /// dictionary nested in an array must come out with BOTH removed — proving
+    /// the traversal recurses instead of only scanning top-level dicts.
+    #[test]
+    fn pdf_strips_nested_and_toplevel_actions() {
+        use lopdf::{Dictionary, Document, Object};
+
+        fn build() -> Vec<u8> {
+            let mut doc = Document::with_version("1.5");
+
+            let mut open_action = Dictionary::new();
+            open_action.set("S", Object::Name(b"JavaScript".to_vec()));
+            open_action.set("JS", Object::string_literal("app.alert('evil');"));
+
+            // A dictionary carrying /JS, hidden one level deep inside an array.
+            let mut nested = Dictionary::new();
+            nested.set("JS", Object::string_literal("nested_evil();"));
+
+            let mut catalog = Dictionary::new();
+            catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+            catalog.set("OpenAction", Object::Dictionary(open_action));
+            catalog.set("Decoy", Object::Array(vec![Object::Dictionary(nested)]));
+
+            let root_id = doc.add_object(Object::Dictionary(catalog));
+            doc.trailer.set("Root", root_id);
+
+            let mut out = Vec::new();
+            doc.save_to(&mut out).expect("save fixture pdf");
+            out
+        }
+
+        let raw = build();
+        let clean = sanitize_pdf(&raw).expect("pdf sanitize").into_bytes();
+
+        // Re-parse the sanitized PDF and assert NO dictionary anywhere still
+        // carries a dangerous key.
+        let doc = lopdf::Document::load_mem(&clean).expect("sanitized pdf must parse");
+
+        fn dict_is_clean(d: &lopdf::Dictionary) -> bool {
+            for bad in [b"JS".as_slice(), b"OpenAction".as_slice(), b"JavaScript".as_slice()] {
+                if d.get(bad).is_ok() {
+                    return false;
+                }
+            }
+            d.iter().all(|(_, v)| obj_is_clean(v))
+        }
+        fn obj_is_clean(o: &lopdf::Object) -> bool {
+            match o {
+                lopdf::Object::Dictionary(d) => dict_is_clean(d),
+                lopdf::Object::Stream(s) => dict_is_clean(&s.dict),
+                lopdf::Object::Array(a) => a.iter().all(obj_is_clean),
+                _ => true,
+            }
+        }
+
+        assert!(
+            doc.objects.values().all(obj_is_clean),
+            "all dangerous keys must be stripped recursively"
+        );
+    }
+
+    // ── Office helpers + tests (C2) ───────────────────────────────────────────
+
+    fn build_ooxml(extra: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        use zip::write::SimpleFileOptions;
+
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut buf);
+            let o = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            z.start_file("[Content_Types].xml", o).unwrap();
+            z.write_all(b"<?xml version=\"1.0\"?><Types/>").unwrap();
+            z.start_file("word/document.xml", o).unwrap();
+            z.write_all(b"<?xml version=\"1.0\"?><w:document/>").unwrap();
+            for (name, data) in extra {
+                z.start_file(*name, o).unwrap();
+                z.write_all(data).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// A macro project named with uppercase extension (`vbaProject.BIN`) must be
+    /// dropped — the old case-sensitive `.ends_with(".bin")` let it through.
+    #[test]
+    fn office_drops_case_variant_macro() {
+        let raw = build_ooxml(&[(
+            "word/vbaProject.BIN",
+            b"\xCF\x11\xE0\xA1\xB1\x1A\xE1\x00 fake OLE macro",
+        )]);
+
+        let clean = disarm(&raw, None).expect("docx must sanitize");
+        assert_eq!(clean.output_format, "office");
+
+        let archive =
+            zip::ZipArchive::new(std::io::Cursor::new(&clean.buffer)).expect("valid output zip");
+        for name in archive.file_names() {
+            assert!(
+                !name.to_ascii_lowercase().contains("vbaproject"),
+                "macro project must be removed regardless of filename case: {name}"
+            );
+        }
+    }
+
+    /// A document carrying a DDEAUTO field instruction cannot be neutralised by
+    /// dropping a part, so the engine must fail closed rather than emit a file
+    /// that still auto-executes.
+    #[test]
+    fn office_fails_closed_on_dde() {
+        let raw = build_ooxml(&[(
+            "word/document2.xml",
+            b"<w:p><w:instrText> DDEAUTO c:\\\\evil cmd </w:instrText></w:p>",
+        )]);
+
+        let err = disarm(&raw, None).expect_err("DDE document must be rejected");
+        assert!(
+            matches!(err, CdrError::OfficeDangerousContent { .. }),
+            "expected OfficeDangerousContent, got {err:?}"
+        );
+    }
+
+    // ── FFI: disarm → free round-trip soundness (C3) ──────────────────────────
+
+    /// Exercises the boxed-slice ownership transfer + free path on a real PNG.
+    /// A capacity-mismatch bug would corrupt the allocator on free; running
+    /// under the test allocator gives us a concrete soundness check.
+    #[test]
+    fn ffi_disarm_free_round_trip_is_sound() {
+        use png::{BitDepth, ColorType, Encoder};
+
+        let mut fixture: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut fixture, 2, 2);
+            enc.set_color(ColorType::Rgb);
+            enc.set_depth(BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&[
+                255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+            ])
+            .unwrap();
+        }
+
+        let res = crate::ffi::gatekeeper_disarm(fixture.as_ptr(), fixture.len());
+        assert!(res.ok, "FFI disarm should succeed (error_code {})", res.error_code);
+        assert!(res.len > 0);
+
+        // output_format is the inline C string; confirm the lowercase vocabulary.
+        let fmt_end = res
+            .output_format
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(res.output_format.len());
+        assert_eq!(&res.output_format[..fmt_end], b"png");
+
+        // Must not corrupt the heap; double-checked by the allocator on drop.
+        crate::ffi::gatekeeper_free_result(res);
+    }
+
+    /// An invalid payload must produce a distinct, non-generic error code via
+    /// the C ABI (M5), not collapse everything into one value.
+    #[test]
+    fn ffi_unknown_format_has_distinct_code() {
+        let junk = [0xDEu8; 32];
+        let res = crate::ffi::gatekeeper_disarm(junk.as_ptr(), junk.len());
+        assert!(!res.ok);
+        assert_eq!(res.error_code, CdrError::UnknownFormat { magic: [0; 4] }.code());
+        crate::ffi::gatekeeper_free_result(res);
+    }
+
+    // ── Output size: PNG encoder tuning ─────────────────────────────────────
+
+    /// Regression: sanitized PNG must not balloon vs a well-compressed source.
+    ///
+    /// Before adaptive Paeth filtering was enabled, Gatekeeper used zlib level 9
+    /// but the `png` crate default (`Sub`, non-adaptive), producing IDAT streams
+    /// often **2–3× larger** than the original despite stripping metadata.
+    #[test]
+    fn png_sanitized_size_stays_near_adaptive_source() {
+        use crate::sanitizers::encode::tune_png_encoder;
+        use png::{BitDepth, ColorType, Encoder};
+
+        let w = 640u32;
+        let h = 480u32;
+        let mut source: Vec<u8> = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut source, w, h);
+            enc.set_color(ColorType::Rgb);
+            enc.set_depth(BitDepth::Eight);
+            tune_png_encoder(&mut enc);
+            let mut writer = enc.write_header().expect("header");
+            let pixels: Vec<u8> = (0..(w as usize * h as usize * 3))
+                .map(|i| ((i * 37) % 256) as u8)
+                .collect();
+            writer.write_image_data(&pixels).expect("pixels");
+        }
+
+        let clean = disarm(&source, None).expect("png disarm").buffer;
+
+        // Same pixels + same encoder tuning → output within ~25% of source.
+        // (Chunk layout / filter heuristics can differ slightly row-to-row.)
+        let max_allowed = source.len() + source.len() / 4;
+        assert!(
+            clean.len() <= max_allowed,
+            "sanitized PNG ({} bytes) should stay near adaptive source ({} bytes); \
+             check PNG filter/compression tuning",
+            clean.len(),
+            source.len()
+        );
+    }
+}

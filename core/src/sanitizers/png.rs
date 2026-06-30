@@ -46,8 +46,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::errors::CdrError;
+use crate::sanitizers::encode::tune_png_encoder;
 use crate::sanitizers::jpeg::SanitizedOutput;
-use png::{BitDepth, ColorType, Compression, Decoder, Encoder};
+use png::{BitDepth, ColorType, Decoder, Encoder};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PNG magic byte constants (module-private, stack-allocated)
@@ -92,24 +93,13 @@ const MAX_COMPRESSED_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
 
 /// Raw pixel geometry produced by the PNG decoder and consumed by the encoder.
 ///
-/// ## Field order and layout
-/// `#[repr(C)]` pins the field order to the declaration order, making the
-/// struct safe to expose through FFI in a future phase without silent
-/// reordering.  On a 64-bit target the layout is:
-///
-/// ```text
-/// offset  0: pixels     (Vec<u8>)    — 24 bytes (ptr 8 + len 8 + cap 8)
-/// offset 24: width      (u32)        —  4 bytes
-/// offset 28: height     (u32)        —  4 bytes
-/// offset 32: color_type (ColorType)  —  1 byte, padded to 4 by alignment
-/// offset 36: bit_depth  (BitDepth)   —  1 byte, padded to 4 by alignment
-/// total:                               40 bytes
-/// ```
+/// Carries everything the encoder needs to faithfully and safely rebuild the
+/// image: the decoded samples, geometry, colour model, and — critically for
+/// `ColorType::Indexed` inputs — the PLTE palette and tRNS transparency table.
 ///
 /// Kept private to this module.  Callers never see or touch these fields
 /// directly; they are consumed in a single named destructuring at the start
 /// of `reconstruct()`.
-#[repr(C)]
 struct PngPixelMatrix {
     /// Flat, interleaved pixel bytes; channel count depends on `color_type`.
     pixels: Vec<u8>,
@@ -121,6 +111,15 @@ struct PngPixelMatrix {
     color_type: ColorType,
     /// Bit depth as reported by the decoder.
     bit_depth: BitDepth,
+    /// PLTE palette bytes (RGB triples) for `ColorType::Indexed` images.
+    ///
+    /// MUST be carried to the encoder: an indexed image whose samples are
+    /// palette indices is meaningless — and the `png` encoder rejects it —
+    /// without the accompanying palette.  `None` for non-indexed images.
+    palette: Option<Vec<u8>>,
+    /// Transparency table (tRNS) preserving per-index / colour-key alpha.
+    /// Carried so transparent indexed/greyscale images keep their transparency.
+    trns: Option<Vec<u8>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,6 +369,14 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
         let width = info.width;
         let height = info.height;
 
+        // Capture the palette + transparency table BEFORE we drop the borrow on
+        // `info`.  These are the ONLY ancillary structures we deliberately keep,
+        // because they are part of the pixel definition for indexed/keyed
+        // images — not metadata.  Everything else (tEXt, iTXt, iCCP, eXIf, …)
+        // is discarded by re-encoding from scratch.
+        let palette: Option<Vec<u8>> = info.palette.as_ref().map(|p| p.clone().into_owned());
+        let trns: Option<Vec<u8>> = info.trns.as_ref().map(|t| t.clone().into_owned());
+
         // Compute our expected byte count from the decoder-reported geometry.
         let channels: usize = color_type.samples();
         let bits: usize = bit_depth as usize;
@@ -422,6 +429,8 @@ impl<'a> PngPipeline<RawPngPayload<'a>> {
                 height,
                 color_type,
                 bit_depth,
+                palette,
+                trns,
             }),
         })
     }
@@ -450,6 +459,8 @@ impl PngPipeline<DisarmedPngMatrix> {
             height,
             color_type,
             bit_depth,
+            palette,
+            trns,
         } = matrix;
 
         // ── Allocate output buffer ────────────────────────────────────────
@@ -468,7 +479,18 @@ impl PngPipeline<DisarmedPngMatrix> {
             let mut encoder = Encoder::new(&mut output, width, height);
             encoder.set_color(color_type);
             encoder.set_depth(bit_depth);
-            encoder.set_compression(Compression::Best);
+            tune_png_encoder(&mut encoder);
+
+            // Re-attach the palette / transparency table for indexed and
+            // colour-keyed images.  Without the PLTE chunk an indexed PNG is
+            // invalid (and the encoder errors); without tRNS its transparency
+            // would be silently lost.
+            if let Some(pal) = palette {
+                encoder.set_palette(pal);
+            }
+            if let Some(t) = trns {
+                encoder.set_trns(t);
+            }
 
             let mut writer = encoder
                 .write_header()

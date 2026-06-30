@@ -44,6 +44,16 @@ use crate::sniffer::{DisarmResult, MIN_SNIFF_LEN};
 /// may be tuned without a semver bump.
 const CHUNK_SIZE: usize = 65_536; // 64 KiB
 
+/// Hard ceiling on the number of bytes buffered from an async source.
+///
+/// The per-format sanitizers each enforce their own compressed-input cap, but
+/// those checks only run **after** the whole payload is in memory.  Without a
+/// ceiling here, a hostile socket/file could stream gigabytes and exhaust RAM
+/// before any sanitizer cap fires.  This bound is set to the largest per-format
+/// input cap (PDF/Office class) so legitimate inputs are never rejected here
+/// while unbounded streams are stopped early.
+const MAX_STREAM_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  AsyncImageStream — generic async reader wrapper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +157,15 @@ impl<R: AsyncRead + Unpin> AsyncImageStream<R> {
 
             if n == 0 {
                 break; // EOF
+            }
+
+            // Bound peak memory: reject the stream the moment it crosses the
+            // ceiling instead of buffering an attacker-controlled amount.
+            if buf.len() + n > MAX_STREAM_BYTES {
+                return Err(CdrError::PayloadTooLarge {
+                    got: buf.len() + n,
+                    limit: MAX_STREAM_BYTES,
+                });
             }
 
             buf.extend_from_slice(&chunk[..n]);

@@ -162,24 +162,68 @@ DisarmResult {
 
 | Input | `buffer` | `png_buffer` | Rationale |
 |-------|----------|-------------|----------|
-| JPEG | JPEG (q90, metadata stripped) | `Some(PNG)` | Two distinct representations |
+| JPEG | JPEG (q85, metadata stripped) | `Some(PNG)` | Two distinct representations |
 | PNG | PNG (lossless) | `None` | `buffer` IS already the lossless PNG |
 | GIF | GIF (extensions stripped) | `Some(PNG)` | Two distinct representations |
 | WebP | PNG (no Rust WebP encoder) | `None` | `buffer` IS already the lossless PNG |
-| PDF | PDF (JS/actions stripped) | `None` | Not an image |
-| Office | Office/ZIP (`.bin` stripped) | `None` | Not an image |
+| PDF | PDF (actions stripped) | `None` | Not an image |
+| Office | Office/ZIP (active content stripped) | `None` | Not an image |
 
-### Storage vs Security Tradeoffs (File Size)
+### Why is the sanitized file a different size?
 
-Gatekeeper enforces a strict zero-trust policy. It **never** attempts to clean a file in place. Instead, it fully decodes the file to a raw pixel matrix and re-encodes it from scratch, sharing **zero bytes** with the original.
+Gatekeeper **never** scrubs bytes in place. Every image passes through:
 
-As a result, you may observe file size changes during sanitization:
+```text
+compressed file  →  decode to raw pixels  →  re-encode from scratch
+     (input)            (memory only)           (output buffer)
+```
 
-- **JPEG → JPEG**: Re-quantization at quality 90 strips all metadata and destroys steganographic LSB payloads. File sizes are similar to the original, sometimes slightly larger or smaller depending on content.
-- **JPEG → PNG (png_buffer)**: The lossless PNG counterpart is typically 2–5× larger than the JPEG because lossless encoding fully represents what lossy JPEG had approximated.
-- **PNG → PNG**: Original PNGs may have been compressed with slow exhaustive optimizers (Zopfli, OptiPNG). Gatekeeper's real-time `Compression::Best` pass produces slightly larger output but is orders of magnitude faster.
-- **GIF → GIF**: Re-indexed from the original palette. Colours may shift slightly on palette-heavy images due to nearest-colour quantization.
-- **GIF → PNG (png_buffer)**: Lossless RGBA PNG — guarantees exact pixel values, typically larger than the GIF.
+The output shares **zero bytes** with the input. Size changes are normal and come from three separate causes:
+
+#### 1. Format change (often much larger — expected)
+
+| What you compare | Why it grows |
+|------------------|--------------|
+| **JPEG in → `png_buffer` out** | Lossy JPEG discards information; lossless PNG stores every decoded pixel exactly. Typically **2–5× larger**. This is correct — use `buffer` (JPEG) when size matters, `png_buffer` when you need a mathematically exact pixel guarantee. |
+| **GIF in → `png_buffer` out** | GIF is palette-indexed and LZW-compressed; the PNG companion is full RGBA lossless. Usually larger. |
+| **WebP in → `buffer` out** | No pure-Rust WebP encoder exists yet, so WebP is decoded to pixels and emitted as PNG. |
+
+#### 2. Lossy generation loss (JPEG / GIF native `buffer`)
+
+| Path | Behaviour |
+|------|-----------|
+| **JPEG → JPEG** (`buffer`) | Fully decoded to RGB, then re-quantized at **quality 85**. This destroys steganographic DCT payloads. Size vs the original depends on the **source** quality: a q60 upload may grow; a q95 upload may shrink. Gatekeeper does not copy the original quantization tables — that would preserve hidden data. |
+| **GIF → GIF** (`buffer`) | Re-quantized with NeuQuant into a fresh local palette. Extension/comment blocks are dropped (smaller), but LZW efficiency may differ from the hand-tuned original. |
+
+#### 3. Re-compression of lossless formats (PNG native `buffer`)
+
+PNG sanitization decodes pixels and writes a **new** PNG containing only `IHDR + PLTE/tRNS (if needed) + IDAT + IEND`. All metadata chunks (`tEXt`, `iCCP`, `eXIf`, trailing polyglot bytes) are removed — which **reduces** size.
+
+The remaining IDAT size depends on deflate level **and** PNG filter strategy:
+
+| Setting | Effect |
+|---------|--------|
+| `Compression::Best` (zlib level 9) | Strong deflate — already used. |
+| **Adaptive Paeth filtering** (per scanline) | Critical for size. Without it, IDAT can be **2–3× larger** than the source even after metadata is stripped. Gatekeeper enables adaptive Paeth on every PNG encode path. |
+
+PNG outputs may still be slightly larger than files passed through slow offline optimizers (`optipng -o7`, Zopfli, brute-force filter search). Gatekeeper targets **real-time** sanitization, not maximum offline compression.
+
+#### Quick reference: which buffer should I use?
+
+| Goal | Use |
+|------|-----|
+| Smallest image output | `buffer` (native format: JPEG/GIF/PNG) |
+| Exact pixel proof / zero-trust archive | `png_buffer` when present, or `buffer` for PNG/WebP inputs |
+| Compare size fairly | Compare `buffer` to the **same format** as the input, not `png_buffer` to a JPEG |
+
+#### Size fields on `DisarmResult`
+
+```text
+original_size_bytes  — length of the untrusted input you passed in
+final_size_bytes     — length of `buffer` only (png_buffer is extra)
+```
+
+To log both outputs: `result.buffer.len()` and `result.png_buffer.as_ref().map(|p| p.len())`.
 
 ---
 
@@ -209,7 +253,7 @@ Commercial CDR products (Glasswall, Votiro, OPSWAT MetaDefender) address the fol
 | **No audit receipt** | Cannot cryptographically prove a file was sanitized | Return a `Blake3` hash of the output buffer alongside the bytes |
 | **No policy engine** | One fixed set of limits for all callers | `CdrPolicy { max_bytes, jpeg_quality, allowed_formats, … }` |
 | **WebP output is PNG** | Format change surprises callers expecting WebP back | Add `libwebp` bindings via `webp` crate for true WebP→WebP |
-| **GIF nearest-colour quantization** | Palette-heavy images shift colours visibly | Replace Euclidean distance with median-cut or Wu quantization |
+| **GIF nearest-colour quantization** | Palette-heavy images shift colours visibly | NeuQuant re-encode (done); Wu/median-cut optional |
 
 ### Is the Current Approach Production-Ready?
 
@@ -235,12 +279,12 @@ This single change halves CPU cost for all JPEG inputs. Everything else in the r
 
 | Format | Detection | Sanitize | Native Output | PNG Output | Status |
 |--------|-----------|----------|---------------|------------|--------|
-| JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ JPEG (q90, all metadata stripped) | ✅ Lossless PNG | **Phase 2 — complete** |
-| PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG (lossless) | — (buffer IS the PNG) | **Phase 3 — complete** |
-| GIF    | ✅ Magic check | ✅ gif crate decode | ✅ GIF (re-indexed, extensions stripped) | ✅ Lossless RGBA PNG | **Phase 4 — complete** |
-| WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG (no pure-Rust encoder) | — (buffer IS the PNG) | **Phase 4 — complete** |
-| Office | ✅ ZIP Magic check | ✅ ZIP unwrap, drop `.bin` | ✅ ZIP re-encode | — (not an image) | **Phase 6 — complete** |
-| PDF    | ✅ `%PDF-` check | ✅ `lopdf` AST load | ✅ AST strip / re-encode | — (not an image) | **Phase 5 — complete** |
+| JPEG   | ✅ Magic + EOI check | ✅ zune-jpeg decode | ✅ JPEG (q85, metadata stripped) | ✅ Lossless PNG | **Complete** |
+| PNG    | ✅ Magic + IHDR check | ✅ png crate decode | ✅ PNG (lossless, adaptive Paeth) | — (buffer IS the PNG) | **Complete** |
+| GIF    | ✅ Magic check | ✅ gif crate decode | ✅ GIF (NeuQuant re-indexed) | ✅ Lossless RGBA PNG | **Complete** |
+| WebP   | ✅ RIFF+WEBP check | ✅ image-webp decode | ✅ PNG (no pure-Rust WebP encoder) | — (buffer IS the PNG) | **Complete** |
+| Office | ✅ ZIP Magic check | ✅ ZIP unwrap + active-content strip | ✅ ZIP re-encode | — (not an image) | **Complete** |
+| PDF    | ✅ `%PDF-` check | ✅ `lopdf` recursive strip | ✅ PDF re-encode | — (not an image) | **Complete** |
 
 ---
 
@@ -248,21 +292,39 @@ This single change halves CPU cost for all JPEG inputs. Everything else in the r
 
 ```
 gatekeeper/
-├── Cargo.toml                  # Manifest: cdylib + rlib targets, dependencies
+├── Cargo.toml                  # Workspace manifest + release profiles
+├── AGENTS.md                   # AI agent / release SOP
 ├── LICENSE                     # AGPLv3
-├── CONTRIBUTING.md             # Contribution guide and PR workflow
-├── README.md                   # You are here
+├── CONTRIBUTING.md
+├── README.md
 │
-├── examples/
-│   └── disarm_image.rs         # CLI driver: run CDR against a real file
+├── core/                       # Rust CDR engine (crate: gatekeeper)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs              # Public API + tests
+│       ├── sniffer.rs          # Format detection + disarm() dispatch
+│       ├── errors.rs           # CdrError taxonomy
+│       ├── ffi.rs              # C ABI for Go / Java
+│       ├── stream.rs           # ImageStream (sync)
+│       ├── async_stream.rs     # AsyncImageStream (Tokio)
+│       └── sanitizers/
+│           ├── encode.rs       # Shared encoder tuning (PNG filters, JPEG q)
+│           ├── jpeg.rs           # JPEG pipeline
+│           ├── png.rs            # PNG pipeline
+│           ├── gif.rs            # GIF pipeline
+│           ├── webp.rs           # WebP pipeline
+│           ├── pdf.rs            # PDF pipeline
+│           └── office.rs         # Office OOXML pipeline
 │
-└── src/
-    ├── lib.rs                  # Public API surface + format sniffer + unit tests
-    ├── errors.rs               # CdrError — strongly-typed, zero-alloc error enum
-    └── sanitizers/
-        ├── mod.rs              # Sanitizer module index
-        ├── jpeg.rs             # JPEG → pixel matrix → PNG pipeline
-        └── png.rs              # PNG → pixel matrix → PNG pipeline
+├── bindings/
+│   ├── node/                   # npm: gatekeeper-cdr (napi-rs)
+│   ├── python/                 # PyPI: gatekeeper-cdr (PyO3)
+│   ├── go/                     # pkg.go.dev (CGo + static libs)
+│   ├── java/                   # Maven (JNI)
+│   └── php/                    # Packagist (ext-php-rs)
+│
+└── examples/
+    └── disarm_image.rs         # CLI driver
 ```
 
 ---

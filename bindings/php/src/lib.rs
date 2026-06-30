@@ -1,5 +1,5 @@
 use ext_php_rs::prelude::*;
-use gatekeeper::{disarm, sniff_format, FileFormat};
+use gatekeeper::{disarm, sniff_format};
 
 /// Sniff the format of a file payload without fully decoding it.
 ///
@@ -8,17 +8,9 @@ use gatekeeper::{disarm, sniff_format, FileFormat};
 #[php_function]
 pub fn gatekeeper_sniff_format(raw: &[u8]) -> Result<String, String> {
     let format = sniff_format(raw).map_err(|e| e.to_string())?;
-    
-    let format_str = match format {
-        FileFormat::Jpeg => "Jpeg",
-        FileFormat::Png => "Png",
-        FileFormat::Gif => "Gif",
-        FileFormat::Webp => "Webp",
-        FileFormat::Office => "Office",
-        FileFormat::Pdf => "Pdf",
-    };
-    
-    Ok(format_str.to_string())
+
+    // Lowercase, matching `detected_format` / `output_format` from `disarm`.
+    Ok(format.as_str().to_string())
 }
 
 /// Disarm and reconstruct a file payload.

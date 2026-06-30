@@ -1,10 +1,43 @@
-use lopdf::Document;
+use lopdf::{Dictionary, Document, Object};
 
 use crate::errors::CdrError;
 use crate::sanitizers::jpeg::SanitizedOutput;
 
-const MAX_COMPRESSED_BYTES: usize = 256 * 1024 * 1024; // 256 MiB for PDFs
+const MAX_COMPRESSED_BYTES: usize = 64 * 1024 * 1024; // 64 MiB compressed input cap
+/// Decompression-bomb guard: reject if the rebuilt PDF balloons past this.
+const MAX_OUTPUT_BYTES: usize = 512 * 1024 * 1024; // 512 MiB rebuilt-output cap
 const MIN_PDF_LEN: usize = 15; // Minimum PDF length
+
+/// Dictionary keys that carry active content, scripting, auto-actions, or
+/// embedded/remote payloads.  Removed from **every** dictionary in the object
+/// graph — including stream dictionaries and inline dictionaries nested inside
+/// arrays — so the blacklist cannot be evaded by hiding an action one level
+/// deeper than a naive top-level scan would reach.
+///
+/// `lopdf` normalises name tokens (e.g. the `/J#53` hex-escape decodes to
+/// `JS`), so matching on the canonical byte form is sufficient.
+const DANGEROUS_KEYS: &[&[u8]] = &[
+    b"JS",            // JavaScript action body
+    b"JavaScript",    // JavaScript name-tree / action
+    b"AA",            // Additional-Actions (triggers on open/close/focus/etc.)
+    b"OpenAction",    // runs automatically when the document opens
+    b"Launch",        // Launch action — spawns external programs
+    b"EmbeddedFile",  // embedded file stream
+    b"EmbeddedFiles", // embedded-files name tree
+    b"Names",         // often hosts the EmbeddedFiles / JavaScript name trees
+    b"A",             // generic Action dictionary (links, form buttons)
+    b"URI",           // URI action — data exfiltration / C2 callback
+    b"SubmitForm",    // submits form data to a remote endpoint
+    b"ImportData",    // pulls remote form data
+    b"GoToR",         // remote go-to (opens another file/URL)
+    b"GoToE",         // embedded go-to
+    b"RichMedia",     // Flash / 3D / embedded media execution
+    b"Movie",         // legacy multimedia execution
+    b"Sound",         // legacy multimedia execution
+    b"Rendition",     // multimedia rendition action
+    b"SetState",      // state-change action
+    b"Trans",         // presentation transition action chains
+];
 
 /// Stage 1: An unvalidated, raw byte slice claimed to be a PDF document.
 pub struct RawPdfPayload<'a>(&'a [u8]);
@@ -61,34 +94,61 @@ impl<'a> PdfPipeline<RawPdfPayload<'a>> {
         }
     }
 
-    /// Decodes the PDF document tree using `lopdf`.
-    /// Iterates through every object in the document and deletes specific dictionary keys
-    /// known to harbor execution payloads or embedded files.
+    /// Decodes the PDF document tree using `lopdf` and recursively strips every
+    /// active-content vector from the entire object graph.
+    ///
+    /// ## Why recursion is mandatory
+    /// The previous implementation only inspected top-level `Object::Dictionary`
+    /// values.  That missed **stream dictionaries** (`Object::Stream` carries its
+    /// own `dict`) and **inline dictionaries nested inside arrays** or inside
+    /// other dicts.  An attacker could therefore place an `/OpenAction` or `/JS`
+    /// one level below the scan and sail through.  We now walk every reachable
+    /// node.
+    ///
+    /// Indirect `Object::Reference`s are intentionally NOT followed during the
+    /// walk — the object they point at is itself a top-level entry in
+    /// `doc.objects`, so it is visited exactly once on its own.  This also makes
+    /// the traversal acyclic and panic-free regardless of reference cycles.
     pub fn decode(self) -> Result<PdfPipeline<DisarmedPdfTree>, CdrError> {
         let RawPdfPayload(bytes) = self.stage;
         let mut doc =
             Document::load_mem(bytes).map_err(|e| CdrError::PdfDecodeFailed { source: e })?;
 
-        // ── ZERO-TRUST PDF SANITIZATION ──
-        // Iterate through all objects in the document
+        // ── ZERO-TRUST PDF SANITIZATION (full graph walk) ──
         for (_id, object) in doc.objects.iter_mut() {
-            if let lopdf::Object::Dictionary(dict) = object {
-                // Remove keys known to harbor malicious execution or embedding vectors
-                dict.remove(b"JS");
-                dict.remove(b"JavaScript");
-                dict.remove(b"AA");
-                dict.remove(b"OpenAction");
-                dict.remove(b"Launch");
-                dict.remove(b"EmbeddedFiles");
-                // Remove Action dictionary which triggers execution (e.g. from links or form buttons)
-                dict.remove(b"A");
-                dict.remove(b"Names"); // Often holds embedded file mappings
-            }
+            sanitize_object(object);
         }
 
         Ok(PdfPipeline {
             stage: DisarmedPdfTree(doc),
         })
+    }
+}
+
+/// Strip every [`DANGEROUS_KEYS`] entry from a dictionary, then recurse into the
+/// values that survive so nested dictionaries are cleaned too.
+fn sanitize_dictionary(dict: &mut Dictionary) {
+    for key in DANGEROUS_KEYS {
+        dict.remove(key);
+    }
+    for (_k, v) in dict.iter_mut() {
+        sanitize_object(v);
+    }
+}
+
+/// Recursively sanitise a single object.  Handles dictionaries, stream
+/// dictionaries, and arrays of inline objects.  Scalars and references are
+/// leaves and need no work.
+fn sanitize_object(object: &mut Object) {
+    match object {
+        Object::Dictionary(dict) => sanitize_dictionary(dict),
+        Object::Stream(stream) => sanitize_dictionary(&mut stream.dict),
+        Object::Array(items) => {
+            for item in items.iter_mut() {
+                sanitize_object(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -100,6 +160,17 @@ impl PdfPipeline<DisarmedPdfTree> {
         let mut out_buffer = Vec::new();
         doc.save_to(&mut out_buffer)
             .map_err(|e| CdrError::PdfEncodeFailed { source: e })?;
+
+        // Decompression-bomb guard: a small input with heavily compressed
+        // object/cross-reference streams can rebuild into a gigabyte-scale
+        // document.  Reject anything past the output budget instead of handing
+        // a memory bomb back to the caller.
+        if out_buffer.len() > MAX_OUTPUT_BYTES {
+            return Err(CdrError::PdfTooLarge {
+                bytes: out_buffer.len(),
+                limit: MAX_OUTPUT_BYTES,
+            });
+        }
 
         Ok(PdfPipeline {
             stage: PristinePdfStream(out_buffer),

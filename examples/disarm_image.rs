@@ -102,6 +102,18 @@ fn main() {
         result.final_size_bytes as f64 / 1024.0,
         result.output_format
     );
+    let ratio = result.final_size_bytes as f64 / result.original_size_bytes as f64;
+    println!(
+        "  Size ratio    : {:.1}% of original ({} → {})",
+        ratio * 100.0,
+        result.original_size_bytes,
+        result.final_size_bytes
+    );
+    if ratio > 1.1 {
+        println!(
+            "  Note          : native output is larger — see README \"Why is the sanitized file a different size?\""
+        );
+    }
 
     // ── Write outputs ─────────────────────────────────────────────────────
     let native_out_path = format!("{}.{}", base_output_path, result.output_format);
@@ -118,9 +130,10 @@ fn main() {
         println!("▶ Writing PNG    : {}", png_out_path);
         
         println!(
-            "  PNG Output    : {} bytes ({:.2} KB)",
+            "  PNG Output    : {} bytes ({:.2} KB) [{:.1}% of original]",
             png_bytes.len(),
-            png_bytes.len() as f64 / 1024.0
+            png_bytes.len() as f64 / 1024.0,
+            (png_bytes.len() as f64 / result.original_size_bytes as f64) * 100.0
         );
 
         if let Err(e) = fs::write(&png_out_path, &png_bytes) {
